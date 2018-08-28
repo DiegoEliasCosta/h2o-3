@@ -222,6 +222,12 @@ subprojects {
         maven {
           url "http://repository.mapr.com/maven/"
         }
+        maven {
+            url "$localNexusLocation/snapshots/"
+        }
+        maven {
+            url "$localNexusLocation/releases/"
+        }
         // mavenLocal()
     }
 
