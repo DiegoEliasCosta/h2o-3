@@ -109,10 +109,14 @@ public class PCACatOnlyPUBDEV3988Bench {
   }
 
   @TearDown(Level.Invocation)
-  public void tearDown() {
+  public void tearDownInvocation() {
     if (pcaModel != null) {
       pcaModel.remove();
     }
+  }
+  
+  @TearDown(Level.Iteration)
+  public void tearDown() {
     if (trainingFrame != null) {
       trainingFrame.delete();
     }
