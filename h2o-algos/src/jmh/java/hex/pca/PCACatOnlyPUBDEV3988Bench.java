@@ -50,7 +50,7 @@ public class PCACatOnlyPUBDEV3988Bench {
     new Runner(opt).run();
   }
 
-  @Setup(Level.Invocation)
+  @Setup(Level.Iteration)
   public void setup() {
     water.util.Log.setLogLevel(logLevel);
     stall_till_cloudsize(1);
@@ -77,7 +77,19 @@ public class PCACatOnlyPUBDEV3988Bench {
       paramsCatOnlyPUBDEV3988._impute_missing = true;   // Don't skip rows with NA entries, but impute using mean of column
       paramsCatOnlyPUBDEV3988._seed = seed;
 
-      if (!train()) {                               // prepare the model for scoring
+      
+    } catch (RuntimeException e) {
+      if (trainingFrame != null) {
+        trainingFrame.delete();
+      }
+      throw e;
+    }
+  }
+  
+  @Setup(Level.Invocation)
+  public void setupInvocation() {
+    try {
+      if (!train()) { // prepare the model for scoring
         throw new RuntimeException("PCA model failed to be trained.");
       }
     } catch (RuntimeException e) {
