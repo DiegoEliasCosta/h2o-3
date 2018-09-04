@@ -2,6 +2,7 @@ package hex.tree.gbm;
 
 import hex.genmodel.algos.tree.SharedTreeMojoModel;
 import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
@@ -43,15 +44,13 @@ public class GbmMojoScoringBench {
   }
 
   @Benchmark
-  public double measureGbmScore0() throws Exception {
-    double sum = 0;
+  public void measureGbmScore0(Blackhole bh) throws Exception {
     double[] pred = new double[3];
     for (int i = 0; i < rows; i++) {
       double[] row = _data[i % _data.length];
       pred[0] = 0.0; pred[1] = 0.0; pred[2] = 0.0;
-      sum += _mojo.score0(row, pred)[1];
+      bh.consume(_mojo.score0(row, pred)[1]);
     }
-    return sum;
   }
 
   @TearDown(Level.Invocation)
