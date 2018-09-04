@@ -5,7 +5,7 @@
 apply plugin: 'me.champeau.gradle.jmh'
 
 buildscript {
-    ext.bench = 'GbmMojoScoringBench'
+    ext.bench = 'PCACatOnlyPUBDEV3988Bench'
 }
 
 ext {
