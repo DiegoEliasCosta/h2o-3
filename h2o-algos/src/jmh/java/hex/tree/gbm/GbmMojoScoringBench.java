@@ -36,14 +36,10 @@ public class GbmMojoScoringBench {
     new Runner(opt).run();
   }
 
-  @Setup(Level.Invocation)
-  public void setup() throws IOException {
-    _mojo = (SharedTreeMojoModel) ClasspathReaderBackend.loadMojo("prostate");
-    _data = ProstateData.ROWS;
-  }
-
   @Benchmark
   public double measureGbmScore0() throws Exception {
+	_mojo = (SharedTreeMojoModel) ClasspathReaderBackend.loadMojo("prostate");
+	_data = ProstateData.ROWS;
     double sum = 0;
     double[] pred = new double[3];
     for (int i = 0; i < rows; i++) {
@@ -53,12 +49,5 @@ public class GbmMojoScoringBench {
     }
     return sum;
   }
-
-  @TearDown(Level.Invocation)
-  public void tearDown() {
-    _mojo = null;
-    _data = null;
-  }
-
 
 }
