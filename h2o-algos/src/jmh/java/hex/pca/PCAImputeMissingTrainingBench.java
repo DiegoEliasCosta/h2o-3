@@ -47,7 +47,7 @@ public class PCAImputeMissingTrainingBench {
 		new Runner(opt).run();
 	}
 	
-	@Setup(Level.Invocation)
+	@Setup(Level.Iteration)
 	public void setup() {
 		water.util.Log.setLogLevel(logLevel);
 		stall_till_cloudsize(1);
@@ -74,7 +74,9 @@ public class PCAImputeMissingTrainingBench {
 			paramsImputeMissing._impute_missing = true;   // Don't skip rows with NA entries, but impute using mean of column
 			paramsImputeMissing._seed = seed;
 			
-			train();
+			//train();
+			// There is no need for such training here
+			
 		} catch (RuntimeException e) {
 			if (trainingFrame != null) {
 				trainingFrame.delete();
