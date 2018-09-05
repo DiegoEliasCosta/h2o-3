@@ -94,11 +94,15 @@ public class PCAImputeMissingTrainingBench {
 		return true;
 	}
 	
-	@TearDown(Level.Iteration)
-	public void tearDown() {
+	@TearDown(Level.Invocation)
+	public void tearDownInvocation() {
 		if (pcaModel != null) {
 			pcaModel.remove();
 		}
+	}
+	
+	@TearDown(Level.Iteration)
+	public void tearDown() {
 		if (trainingFrame != null) {
 			trainingFrame.delete();
 		}
