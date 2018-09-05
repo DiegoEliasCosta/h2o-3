@@ -35,11 +35,15 @@ public class GbmMojoScoringBench {
 
     new Runner(opt).run();
   }
-
-  @Setup(Level.Invocation)
-  public void setup() throws IOException {
-    _mojo = (SharedTreeMojoModel) ClasspathReaderBackend.loadMojo("prostate");
+  
+  @Setup(Level.Iteration)
+  public void setup()  {
     _data = ProstateData.ROWS;
+  }
+  
+  @Setup(Level.Invocation)
+  public void setupInvocation() throws IOException {
+	 _mojo = (SharedTreeMojoModel) ClasspathReaderBackend.loadMojo("prostate");  
   }
 
   @Benchmark
@@ -57,7 +61,6 @@ public class GbmMojoScoringBench {
   @TearDown(Level.Invocation)
   public void tearDown() {
     _mojo = null;
-    _data = null;
   }
 
 

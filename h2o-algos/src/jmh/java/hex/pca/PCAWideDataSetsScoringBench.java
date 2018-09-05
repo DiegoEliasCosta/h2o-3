@@ -38,14 +38,17 @@ public class PCAWideDataSetsScoringBench {
 		new Runner(opt).run();
 	}
 	
-	@Setup(Level.Invocation)
+	@Setup(Level.Iteration)
 	public void setup() {
 		water.util.Log.setLogLevel(logLevel);
 		stall_till_cloudsize(1);
-		
+	}
+	
+	@Setup(Level.Invocation)
+	public void setupInvocation() {
 		pcaWideDataSetsBench = new PCAWideDataSets(dataSetCase, PCAImplementation);
 		// train model to prepare for score()
-		pcaWideDataSetsBench.train();
+		pcaWideDataSetsBench.train();	
 	}
 	
 	@Benchmark
