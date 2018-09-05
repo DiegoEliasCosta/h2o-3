@@ -5,7 +5,9 @@
 apply plugin: 'me.champeau.gradle.jmh'
 
 buildscript {
-    ext.bench = 'PCACatOnlyPUBDEV3988Bench'
+    ext.bench = 'PCAImputeMissingTrainingBench'
+    ext.trial = 1
+    ext.suffix = 'original'
 }
 
 ext {
@@ -42,8 +44,8 @@ jmh {
     //jvmArgs = ['Custom JVM args to use when forking.']
     //jvmArgsAppend = ['Custom JVM args to use when forking (append these)']
     //jvmArgsPrepend =[ 'Custom JVM args to use when forking (prepend these)']
-    //humanOutputFile = project.file("${project.buildDir}/reports/jmh/human.txt") // human-readable output file
-    resultsFile = project.file("${project.buildDir}/reports/jmh/results-${bench}.txt") // results file
+    humanOutputFile = project.file("${project.buildDir}/reports/jmh/human-${bench}_${suffix}_trial${trial}.txt") // human-readable output file
+    resultsFile = project.file("${project.buildDir}/reports/jmh/results-${bench}.json") // results file
     //operationsPerInvocation = 10 // Operations per invocation.
     //benchmarkParameters =  [:] // Benchmark parameters.
     //profilers = [] // Use profilers to collect additional data. Supported profilers: [cl, comp, gc, stack, perf, perfnorm, perfasm, xperf, xperfasm, hs_cl, hs_comp, hs_gc, hs_rt, hs_thr]
@@ -65,7 +67,7 @@ jmh {
     jmhVersion = '1.21'
     resultsFile = project.jmhResultFile
     duplicateClassesStrategy = 'warn'
-    resultFormat = 'CSV'
+    resultFormat = 'JSON'
     //
     // Attach different profilers (gc, stack summary, ...)
     // See: http://java-performance.info/introduction-jmh-profilers/
