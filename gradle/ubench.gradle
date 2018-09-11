@@ -7,7 +7,7 @@ apply plugin: 'me.champeau.gradle.jmh'
 buildscript {
     ext.bench = 'PCAImputeMissingTrainingBench'
     ext.trial = 1
-    ext.suffix = 'original'
+    ext.suffix = 'fixed'
 }
 
 ext {
@@ -37,7 +37,7 @@ jmh {
     iterations = 30 // Number of measurement iterations to do.
     //benchmarkMode = ['thrpt','ss'] // Benchmark mode. Available modes are: [Throughput/thrpt, AverageTime/avgt, SampleTime/sample, SingleShotTime/ss, All/all]
     //batchSize = 1 // Batch size: number of benchmark method calls per operation. (some benchmark modes can ignore this setting)
-    fork = 1 // How many times to forks a single benchmark. Use 0 to disable forking altogether
+    fork = 5 // How many times to forks a single benchmark. Use 0 to disable forking altogether
     //failOnError = false // Should JMH fail immediately if any benchmark had experienced the unrecoverable error?
     //forceGC = false // Should JMH force GC between iterations?
     //jvm = 'myjvm' // Custom JVM to use when forking.
