@@ -59,7 +59,7 @@ Defining a GBM Model
 
 -  `ntrees <algo-params/ntrees.html>`__: Specify the number of trees to build.
 
--  `max_depth <algo-params/max_depth.html>`__: Specify the maximum tree depth.
+-  `max_depth <algo-params/max_depth.html>`__: Specify the maximum tree depth. Higher values will make the model more complex and can lead to overfitting. Setting this value to 0 specifies no limit. This value defaults to 5.
 
 -  `min_rows <algo-params/min_rows.html>`__: Specify the minimum number of observations for a leaf
    (``nodesize`` in R).
@@ -126,6 +126,7 @@ Defining a GBM Model
 
   - ``auto`` or ``AUTO``: Allow the algorithm to decide (default). In GBM, the algorithm will automatically perform ``enum`` encoding.
   - ``enum`` or ``Enum``: 1 column per categorical feature
+  - ``enum_limited`` or ``EnumLimited``: Automatically reduce categorical levels to the most prevalent ones during Aggregator training and only keep the **T** most frequent levels.
   - ``one_hot_explicit`` or ``OneHotExplicit``: N+1 new columns for categorical features with N levels
   - ``binary``: No more than 32 columns per categorical feature
   - ``eigen`` or ``Eigen``: *k* columns per categorical feature, keeping projections of one-hot-encoded matrix onto *k*-dim eigen space only
@@ -334,7 +335,7 @@ GBM Tuning Guide
 * `R <https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/tutorials/gbm/gbmTuning.Rmd>`__
 * `Python <https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/tutorials/gbm/gbmTuning.ipynb>`__
 * `H2O Flow <https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/tutorials/gbm/gbmTuning.flow>`__
-* `Blog <http://blog.h2o.ai/2016/06/h2o-gbm-tuning-tutorial-for-r/>`__
+* `Blog <http://www.h2o.ai/blog/h2o-gbm-tuning-tutorial-for-r/>`__
 
 References
 ~~~~~~~~~~

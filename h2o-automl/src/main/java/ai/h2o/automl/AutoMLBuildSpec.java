@@ -49,9 +49,10 @@ public class AutoMLBuildSpec extends Iced {
     public float max_after_balance_size = 5.0f;
 
     public int nfolds = 5;
-    public boolean keep_cross_validation_predictions = true;
-    public boolean keep_cross_validation_models = true;
+    public boolean keep_cross_validation_predictions = false;
+    public boolean keep_cross_validation_models = false;
     public boolean keep_cross_validation_fold_assignment = false;
+    public String export_checkpoints_dir = null;
   }
 
   /**
@@ -74,10 +75,10 @@ public class AutoMLBuildSpec extends Iced {
   }
 
   /**
-   * The specification of the parameters for building models for a single Algo (e.g., GBM), including base model parameters and hyperparameter search.
+   * The specification of the parameters for building models for a single algo (e.g., GBM), including base model parameters and hyperparameter search.
    */
   static final public class AutoMLBuildModels extends Iced {
-    public AutoML.Algo[] exclude_algos;
+    public AutoML.algo[] exclude_algos;
   }
 
   public AutoMLBuildControl build_control;

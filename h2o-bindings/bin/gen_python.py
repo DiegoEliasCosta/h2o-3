@@ -21,7 +21,8 @@ class PythonTypeTranslatorForCheck(bi.TypeTranslator):
         self.types["Object"] = "object"
         self.types["VecSpecifier"] = "str"
         self.types["StringPair"] = "tuple"
-        self.make_array = lambda vtype: "[%s]" % vtype
+        self.types["KeyValue"] = "dict"
+        self.make_array = lambda vtype: "dict" if vtype == "dict" else "[%s]" % vtype
         self.make_array2 = lambda vtype: "[[%s]]" % vtype
         self.make_map = lambda ktype, vtype: "{%s: %s}" % (ktype, vtype)
         self.make_key = lambda itype, schema: "H2OFrame" if schema == "Key<Frame>" else "str"
@@ -48,7 +49,8 @@ class PythonTypeTranslatorForDoc(bi.TypeTranslator):
         self.types["Object"] = "object"
         self.types["VecSpecifier"] = "str"
         self.types["StringPair"] = "tuple"
-        self.make_array = lambda vtype: "List[%s]" % vtype
+        self.types["KeyValue"] = "dict"
+        self.make_array = lambda vtype: "dict" if vtype == "dict" else "List[%s]" % vtype
         self.make_array2 = lambda vtype: "List[List[%s]]" % vtype
         self.make_map = lambda ktype, vtype: "Dict[%s, %s]" % (ktype, vtype)
         self.make_key = lambda itype, schema: "H2OFrame" if schema == "Key<Frame>" else "str"
@@ -296,6 +298,7 @@ def algo_to_classname(algo):
     if algo == "svd": return "H2OSingularValueDecompositionEstimator"
     if algo == "pca": return "H2OPrincipalComponentAnalysisEstimator"
     if algo == "stackedensemble": return "H2OStackedEnsembleEstimator"
+    if algo == "isolationforest": return "H2OIsolationForestEstimator"
     return "H2O" + algo.capitalize() + "Estimator"
 
 def extra_imports_for(algo):
@@ -341,6 +344,14 @@ def help_preamble_for(algo):
             or more H2O learning algorithms to improve predictive performance. It is a loss-based
             supervised learning method that finds the optimal combination of a collection of prediction
             algorithms.This method supports regression and binary classification. """
+    if algo == "isolationforest":
+        return """
+            Builds an Isolation Forest model. Isolation Forest algorithm samples the training frame
+            and in each iteration builds a tree that partitions the space of the sample observations until
+            it isolates each observation. Length of the path from root to a leaf node of the resulting tree
+            is used to calculate the anomaly score. Anomalies are easier to isolate and their average
+            tree path is expected to be shorter than paths of regular observations.
+        """
 
 def help_epilogue_for(algo):
     if algo == "deeplearning":
@@ -621,6 +632,7 @@ def main():
         module = name
         if name == "drf": module = "random_forest"
         if name == "naivebayes": module = "naive_bayes"
+        if name == "isolationforest": module = "isolation_forest"
         bi.vprint("Generating model: " + name)
         bi.write_to_file("%s.py" % module, gen_module(mb, name))
         category = "Supervised" if mb["supervised"] else "Unsupervised"

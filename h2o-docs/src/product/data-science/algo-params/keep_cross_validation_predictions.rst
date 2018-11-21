@@ -1,3 +1,5 @@
+.. _keep_cross_validation_predictions:
+
 ``keep_cross_validation_predictions``
 -------------------------------------
 
@@ -15,6 +17,7 @@ Related Parameters
 ~~~~~~~~~~~~~~~~~~
 
 - `keep_cross_validation_fold_assignment <keep_cross_validation_fold_assignment.html>`__
+- `keep_cross_validation_models <keep_cross_validation_models.html>`__
 - `nfolds <nfolds.html>`__
 
 

@@ -6,6 +6,7 @@ from past.builtins import basestring
 from scipy.sparse import csr_matrix
 import sys, os
 import pandas as pd
+from six import string_types
 
 try:        # works with python 2.7 not 3
     from StringIO import StringIO
@@ -44,6 +45,32 @@ import math
 from random import shuffle
 import scipy.special
 from h2o.utils.typechecks import assert_is_type
+import datetime
+import time # needed to randomly generate time
+import uuid # call uuid.uuid4() to generate unique uuid numbers
+
+def gen_random_uuid(numberUUID):
+    uuidVec = numberUUID*[None]
+
+    for uindex in range(numberUUID):
+        uuidVec[uindex] = uuid.uuid4()
+    return uuidVec
+
+def gen_random_time(numberTimes, maxtime= datetime.datetime(2080, 8,6,8,14,59), mintime=datetime.datetime(1980, 8,6,6,14,59)):
+    '''
+    Simple method that I shameless copied from the internet.
+    :param numberTimes:
+    :param maxtime:
+    :param mintime:
+    :return:
+    '''
+    mintime_ts = int(time.mktime(mintime.timetuple()))
+    maxtime_ts = int(time.mktime(maxtime.timetuple()))
+    randomTimes = numberTimes*[None]
+    for tindex in range(numberTimes):
+        temptime = random.randint(mintime_ts, maxtime_ts)
+        randomTimes[tindex] = datetime.datetime.fromtimestamp(temptimes)
+    return randomTimes
 
 
 def check_models(model1, model2, use_cross_validation=False, op='e'):
@@ -458,7 +485,8 @@ def pyunit_exec(test_name):
     exec(pyunit_c, {})
 
 def standalone_test(test):
-    h2o.init(strict_version_check=False)
+    if not h2o.h2o.connection():
+        h2o.init(strict_version_check=False)
 
     h2o.remove_all()
 
@@ -833,10 +861,10 @@ def generate_training_set_glm(csv_filename, row_count, col_count, min_p_value, m
 
     # for family_type = 'multinomial' or 'binomial', response_y can be -ve to indicate bad sample data.
     # need to delete this data sample before proceeding
-    if ('multinomial' in family_type.lower()) or ('binomial' in family_type.lower()) or ('ordinal' in family_type.lower()):
-        if 'threshold' in class_method.lower():
-            if np.any(response_y < 0):  # remove negative entries out of data set
-                (x_mat, response_y) = remove_negative_response(x_mat, response_y)
+    # if ('multinomial' in family_type.lower()) or ('binomial' in family_type.lower()) or ('ordinal' in family_type.lower()):
+    #     if 'threshold' in class_method.lower():
+    #         if np.any(response_y < 0):  # remove negative entries out of data set
+    #             (x_mat, response_y) = remove_negative_response(x_mat, response_y)
 
     # write to file in csv format
     np.savetxt(csv_filename, np.concatenate((x_mat, response_y), axis=1), delimiter=",")
@@ -1235,42 +1263,7 @@ def derive_discrete_response(prob_mat, class_method, class_margin, family_type='
     """
 
     (num_sample, num_class) = prob_mat.shape
-    lastCat = num_class-1
-    if 'probability' in class_method.lower():
-        prob_mat = normalize_matrix(prob_mat)
-    discrete_y = np.zeros((num_sample, 1), dtype=np.int)
-
-    if 'probability' in class_method.lower():
-        if 'ordinal' not in family_type.lower():
-            prob_mat = np.cumsum(prob_mat, axis=1)
-        else: # for ordinal
-            for indR in list(range(num_sample)):
-                for indC in list(range(num_class)):
-                    prob_mat[indR, indC] = prob_mat[indR,indC]/prob_mat[indR,lastCat]
-        random_v = np.random.uniform(0, 1, [num_sample, 1])
-
-        # choose the class that final response y belongs to according to the
-        # probability prob(y=k)
-        class_bool = random_v < prob_mat
-
-        for indR in range(num_sample):
-            for indC in range(num_class):
-                if class_bool[indR, indC]:
-                    discrete_y[indR, 0] = indC
-                    break
-
-    elif 'threshold' in class_method.lower():
-        discrete_y = np.argmax(prob_mat, axis=1)
-
-        temp_mat = np.diff(np.sort(prob_mat, axis=1), axis=1)
-
-        # check if max value exceeds second one by at least margin
-        mat_diff = temp_mat[:, num_class-2]
-        mat_bool = mat_diff < class_margin
-
-        discrete_y[mat_bool] = -1
-    else:
-        assert False, 'class_method should be set to "probability" or "threshold" only!'
+    discrete_y =  np.argmax(prob_mat, axis=1)
 
     return discrete_y
 
@@ -1483,6 +1476,85 @@ def show_test_results(test_name, curr_test_val, new_test_val):
         print(pass_string)
         return 0
 
+def assert_H2OTwoDimTable_equal_upto(table1, table2, col_header_list, tolerance=1e-6):
+    '''
+    This method will compare two H2OTwoDimTables that are almost of the same size.  table1 can be shorter
+    than table2.  However, for whatever part of table2 table1 has, they must be the same.
+    :param table1:
+    :param table2:
+    :param col_header_list:
+    :param tolerance:
+    :return:
+    '''
+    size1 = len(table1.cell_values)
+
+    for cname in col_header_list:
+        colindex = table1.col_header.index(cname)
+
+        for cellind in range(size1):
+            val1 = table1.cell_values[cellind][colindex]
+            val2 = table2.cell_values[cellind][colindex]
+
+            if isinstance(val1, float) and isinstance(val2, float):
+                assert abs(val1-val2) < tolerance, \
+                    "table 1 value {0} and table 2 value {1} in {2} differ more than tolerance of " \
+                    "{3}".format(val1, val2, cname, tolerance)
+            else:
+                assert val1==val2, "table 1 value {0} and table 2 value {1} in {2} differ more than tolerance of " \
+                                   "{3}".format(val1, val2, cname, tolerance)
+    print("******* Congrats!  Test passed. ")
+
+
+
+def extract_col_value_H2OTwoDimTable(table, col_name):
+    '''
+    This function given the column name will extract a list containing the value used for the column name from the
+    H2OTwoDimTable.
+
+    :param table:
+    :param col_name:
+    :return:
+    '''
+
+    tableList = []
+    col_header = table.col_header
+    colIndex = col_header.index(col_name)
+    for ind in range(len(table.cell_values)):
+        temp = table.cell_values[ind]
+        tableList.append(temp[colIndex])
+
+    return tableList
+
+
+def assert_H2OTwoDimTable_equal_upto(table1, table2, col_header_list, tolerance=1e-6):
+    '''
+    This method will compare two H2OTwoDimTables that are almost of the same size.  table1 can be shorter
+    than table2.  However, for whatever part of table2 table1 has, they must be the same.
+
+    :param table1:
+    :param table2:
+    :param col_header_list:
+    :param tolerance:
+    :return:
+    '''
+    size1 = len(table1.cell_values)
+
+    for cname in col_header_list:
+        colindex = table1.col_header.index(cname)
+
+        for cellind in range(size1):
+            val1 = table1.cell_values[cellind][colindex]
+            val2 = table2.cell_values[cellind][colindex]
+
+            if isinstance(val1, float) and isinstance(val2, float):
+                assert abs(val1-val2) < tolerance, \
+                    "table 1 value {0} and table 2 value {1} in {2} differ more than tolerance of " \
+                    "{3}".format(val1, val2, cname, tolerance)
+            else:
+                assert val1==val2, "table 1 value {0} and table 2 value {1} in {2} differ more than tolerance of " \
+                                   "{3}".format(val1, val2, cname, tolerance)
+    print("******* Congrats!  Test passed. ")
+
 
 def assert_H2OTwoDimTable_equal(table1, table2, col_header_list, tolerance=1e-6, check_sign=False, check_all=True,
                                 num_per_dim=10):
@@ -1496,7 +1568,7 @@ def assert_H2OTwoDimTable_equal(table1, table2, col_header_list, tolerance=1e-6,
 
     :param table1: H2OTwoDimTable to be compared
     :param table2: the other H2OTwoDimTable to be compared
-    :param col_header_list: list of strings denote names that we can the comparison to be performed
+    :param col_header_list: list of strings denote names that we want the comparison to be performed
     :param tolerance: default to 1e-6
     :param check_sign: bool, determine if the sign of values are important or not.  For eigenvectors, they are not.
     :param check_all: bool, determine if we need to compare every single element
@@ -1601,7 +1673,7 @@ def equal_two_arrays(array1, array2, eps, tolerance, throwError=True):
 
                 if compare_val_h2o_Py > tolerance:    # difference is too high, return false
                     if throwError:
-                        assert False, "The two arrays are not equal in value."
+                        assert False, "Array 1 value {0} and array 2 value {1} do not agree.".format(array1[ind], array2[ind])
                     else:
                         return False
 
@@ -3094,14 +3166,14 @@ def model_run_time_sorted_by_time(model_list):
 
 
     for index in range(model_num):
-        model_index = int(model_list[index]._id.split('_')[-1])
+        model_index = int(model_list[index]._id.split('_')[-1]) - 1  # model names start at 1
         model_runtime_sec_list[model_index] = \
             (model_list[index]._model_json["output"]["run_time"]/1000.0)
 
     return model_runtime_sec_list
 
 
-def model_seed_sorted_by_time(model_list):
+def model_seed_sorted(model_list):
     """
     This function is written to find the seed used by each model in the order of when the model was built.  The
     oldest model metric will be the first element.
@@ -3115,13 +3187,11 @@ def model_seed_sorted_by_time(model_list):
 
 
     for index in range(model_num):
-        model_index = int(model_list[index]._id.split('_')[-1])
-
         for pIndex in range(len(model_list.models[0]._model_json["parameters"])):
             if model_list.models[index]._model_json["parameters"][pIndex]["name"]=="seed":
-                model_seed_list[model_index]=model_list.models[index]._model_json["parameters"][pIndex]["actual_value"]
+                model_seed_list[index]=model_list.models[index]._model_json["parameters"][pIndex]["actual_value"]
                 break
-
+    model_seed_list.sort()
     return model_seed_list
 
 
@@ -3356,34 +3426,90 @@ def compute_frame_diff(f1, f2):
     return frameDiff
 
 def compare_frames_local(f1, f2, prob=0.5, tol=1e-6, returnResult=False):
+    '''
+    Compare two h2o frames and make sure they are equal.  However, we do not compare uuid column at this point
+    :param f1:
+    :param f2:
+    :param prob:
+    :param tol:
+    :param returnResult:
+    :return:
+    '''
+    assert (f1.nrow==f2.nrow) and (f1.ncol==f2.ncol), "The two frames are of different sizes."
+    typeDict = f1.types
+    frameNames = f1.names
+
+    for colInd in range(f1.ncol):
+        if (typeDict[frameNames[colInd]]==u'enum'):
+            if returnResult:
+                result = compare_frames_local_onecolumn_NA_enum(f1[colInd], f2[colInd], prob=prob, tol=tol, returnResult=returnResult)
+                if not(result):
+                    return False;
+            else:
+                result = compare_frames_local_onecolumn_NA_enum(f1[colInd], f2[colInd], prob=prob, tol=tol, returnResult=returnResult)
+                if not(result):
+                    return False;
+        elif (typeDict[frameNames[colInd]]==u'string'):
+            if returnResult:
+                result =  compare_frames_local_onecolumn_NA_string(f1[colInd], f2[colInd], prob=prob, returnResult=returnResult)
+                if not(result):
+                    return False
+            else:
+                compare_frames_local_onecolumn_NA_string(f1[colInd], f2[colInd], prob=prob, returnResult=returnResult)
+        elif (typeDict[frameNames[colInd]]==u'uuid'):
+            continue    # do nothing here
+        else:
+            if returnResult:
+                result = compare_frames_local_onecolumn_NA(f1[colInd], f2[colInd], prob=prob, tol=tol, returnResult=returnResult)
+                if not(result):
+                    return False
+            else:
+                compare_frames_local_onecolumn_NA(f1[colInd], f2[colInd], prob=prob, tol=tol, returnResult=returnResult)
+
+    if returnResult:
+        return True
+
+def compare_frames_local_svm(f1, f2, prob=0.5, tol=1e-6, returnResult=False):
+    '''
+    compare f1 and f2 but with f2 parsed from svmlight parser.  Here, the na's should be replaced with 0.0
+
+    :param f1: normal h2oFrame
+    :param f2: h2oFrame parsed from a svmlight parser.
+    :param prob:
+    :param tol:
+    :param returnResult:
+    :return:
+    '''
+    assert (f1.nrow==f2.nrow) and (f1.ncol==f2.ncol), "The two frames are of different sizes."
     temp1 = f1.as_data_frame(use_pandas=False)
     temp2 = f2.as_data_frame(use_pandas=False)
-    assert (f1.nrow==f2.nrow) and (f1.ncol==f2.ncol), "The two frames are of different sizes."
-    for colInd in range(f1.ncol):
-        for rowInd in range(1,f2.nrow):
-            if (random.uniform(0,1) < prob):
-                if (math.isnan(float(temp1[rowInd][colInd]))):
-                    if returnResult:
-                        if not(math.isnan(float(temp2[rowInd][colInd]))):
-                            return False
-                    assert math.isnan(float(temp2[rowInd][colInd])), "Failed frame values check at row {2} and column {3}! " \
-                                                              "frame1 value: {0}, frame2 value: " \
-                                                              "{1}".format(temp1[rowInd][colInd], temp2[rowInd][colInd], rowInd, colInd)
-                else:
-                    v1 = float(temp1[rowInd][colInd])
-                    v2 = float(temp2[rowInd][colInd])
-                    diff = abs(v1-v2)/max(1.0, abs(v1), abs(v2))
-                    if returnResult:
-                        if diff > tol:
-                            return False
-                    assert diff<=tol, "Failed frame values check at row {2} and column {3}! frame1 value: {0}, frame2 value: " \
-                                      "{1}".format(v1, v2, rowInd, colInd)
+    for rowInd in range(1, f1.nrow):
+        for colInd in range(f1.ncol):
+            if (len(temp1[rowInd][colInd]))==0: # encounter NAs
+                if returnResult:
+                    if (abs(float(temp2[rowInd][colInd]))) > tol:
+                        return False
+                assert (abs(float(temp2[rowInd][colInd]))) <= tol, \
+                    "Expected: 0.0 but received: {0} for row: {1}, col: " \
+                    "{2}".format(temp2[rowInd][colInd], rowInd, colInd)
+            else:
+                if returnResult:
+                    if abs(float(temp1[rowInd][colInd])-float(temp2[rowInd][colInd]))>tol:
+                        return False
+                assert abs(float(temp1[rowInd][colInd])-float(temp2[rowInd][colInd]))<=tol, \
+                    "Expected: {1} but received: {0} for row: {2}, col: " \
+                    "{3}".format(temp2[rowInd][colInd], temp1[rowInd][colInd], rowInd, colInd)
+
+
     if returnResult:
         return True
 
 
 # frame compare with NAs in column
-def compare_frames_local_onecolumn_NA(f1, f2, prob=0.5, tol=1e-6):
+def compare_frames_local_onecolumn_NA(f1, f2, prob=0.5, tol=1e-6, returnResult=False):
+    if (f1.types[f1.names[0]] == u'time'):   # we have to divide by 1000 before converting back and forth between ms and time format
+        tol = 10
+
     temp1 = f1.as_data_frame(use_pandas=False)
     temp2 = f2.as_data_frame(use_pandas=False)
     assert (f1.nrow==f2.nrow) and (f1.ncol==f2.ncol), "The two frames are of different sizes."
@@ -3391,17 +3517,28 @@ def compare_frames_local_onecolumn_NA(f1, f2, prob=0.5, tol=1e-6):
         for rowInd in range(1,f2.nrow):
             if (random.uniform(0,1) < prob):
                 if len(temp1[rowInd]) == 0 or len(temp2[rowInd]) == 0:
-                    assert len(temp1[rowInd]) == len(temp2[rowInd]), "Failed frame values check at row {2} ! " \
+                    if returnResult:
+                        if not(len(temp1[rowInd]) == len(temp2[rowInd])):
+                            return False
+                    else:
+                        assert len(temp1[rowInd]) == len(temp2[rowInd]), "Failed frame values check at row {2} ! " \
                                                                      "frame1 value: {0}, frame2 value: " \
                                                                      "{1}".format(temp1[rowInd], temp2[rowInd], rowInd)
                 else:
                     v1 = float(temp1[rowInd][colInd])
                     v2 = float(temp2[rowInd][colInd])
                     diff = abs(v1-v2)/max(1.0, abs(v1), abs(v2))
-                    assert diff<=tol, "Failed frame values check at row {2} and column {3}! frame1 value: {0}, frame2 value: " \
-                                      "{1}".format(v1, v2, rowInd, colInd)
+                    if returnResult:
+                        if (diff > tol):
+                            return False
+                    else:
+                        assert diff<=tol, "Failed frame values check at row {2} and column {3}! frame1 value: {0}, frame2 value: " \
+                                      "{1} and the difference/max(v1,v2) is {4}.  Column type is {5}".format(v1, v2, rowInd, colInd, diff, f1.types)
+    if returnResult:
+        return True
+
 # frame compare with NAs in column
-def compare_frames_local_onecolumn_NA_enum(f1, f2, prob=0.5, tol=1e-6):
+def compare_frames_local_onecolumn_NA_enum(f1, f2, prob=0.5, tol=1e-6, returnResult=False):
     temp1 = f1.as_data_frame(use_pandas=False)
     temp2 = f2.as_data_frame(use_pandas=False)
     assert (f1.nrow==f2.nrow) and (f1.ncol==f2.ncol), "The two frames are of different sizes."
@@ -3409,13 +3546,50 @@ def compare_frames_local_onecolumn_NA_enum(f1, f2, prob=0.5, tol=1e-6):
         for rowInd in range(1,f2.nrow):
             if (random.uniform(0,1) < prob):
                 if len(temp1[rowInd]) == 0 or len(temp2[rowInd]) == 0:
-                    assert len(temp1[rowInd]) == len(temp2[rowInd]), "Failed frame values check at row {2} ! " \
+                    if returnResult:
+                        if not(len(temp1[rowInd]) == len(temp2[rowInd])):
+                            return False
+                    else:
+                        assert len(temp1[rowInd]) == len(temp2[rowInd]), "Failed frame values check at row {2} ! " \
                                                                      "frame1 value: {0}, frame2 value: " \
                                                                      "{1}".format(temp1[rowInd], temp2[rowInd], rowInd)
                 else:
-                    assert temp1[rowInd][colInd]==temp2[rowInd][colInd], "Failed frame values check at row {2} and column {3}! frame1 value: {0}, frame2 value: " \
+                    if returnResult:
+                        if not(temp1[rowInd][colInd]==temp2[rowInd][colInd]):
+                            return False
+                    else:
+                        assert temp1[rowInd][colInd]==temp2[rowInd][colInd], "Failed frame values check at row {2} and column {3}! frame1 value: {0}, frame2 value: " \
                                       "{1}".format(temp1[rowInd][colInd], temp1[rowInd][colInd], rowInd, colInd)
 
+    if returnResult:
+        return True
+
+# frame compare with NAs in column
+def compare_frames_local_onecolumn_NA_string(f1, f2, prob=0.5, returnResult=False):
+    temp1 = f1.as_data_frame(use_pandas=False)
+    temp2 = f2.as_data_frame(use_pandas=False)
+    assert (f1.nrow==f2.nrow) and (f1.ncol==f2.ncol), "The two frames are of different sizes."
+    for colInd in range(f1.ncol):
+        for rowInd in range(1,f2.nrow):
+            if (random.uniform(0,1) < prob):
+                if len(temp1[rowInd]) == 0 or len(temp2[rowInd]) == 0:
+                    if returnResult:
+                        if not(len(temp1[rowInd]) == len(temp2[rowInd])):
+                            return False
+                    else:
+                        assert len(temp1[rowInd]) == len(temp2[rowInd]), "Failed frame values check at row {2} ! " \
+                                                                     "frame1 value: {0}, frame2 value: " \
+                                                                     "{1}".format(temp1[rowInd], temp2[rowInd], rowInd)
+                else:
+                    if returnResult:
+                        if not(temp1[rowInd][colInd]==temp2[rowInd][colInd]):
+                            return False
+                    else:
+                        assert temp1[rowInd][colInd]==temp2[rowInd][colInd], "Failed frame values check at row {2} and column {3}! frame1 value: {0}, frame2 value: " \
+                                                                         "{1}".format(temp1[rowInd][colInd], temp1[rowInd][colInd], rowInd, colInd)
+
+    if returnResult:
+        return True
 
 def build_save_model_GLM(params, x, train, respName):
     # build a model
@@ -3461,7 +3635,7 @@ def build_save_model_DRF(params, x, train, respName):
 
 
 # generate random dataset, copied from Pasha
-def random_dataset(response_type, verbose=True, NTESTROWS=200):
+def random_dataset(response_type, verbose=True, NTESTROWS=200, missing_fraction=0.0, seed=None):
     """Create and return a random dataset."""
     if verbose: print("\nCreating a dataset for a %s problem:" % response_type)
     fractions = {k + "_fraction": random.random() for k in "real categorical integer time string binary".split()}
@@ -3477,16 +3651,16 @@ def random_dataset(response_type, verbose=True, NTESTROWS=200):
     else:
         response_factors = random.randint(3, 10)
     df = h2o.create_frame(rows=random.randint(15000, 25000) + NTESTROWS, cols=random.randint(3, 20),
-                          missing_fraction=0,
+                          missing_fraction=missing_fraction,
                           has_response=True, response_factors=response_factors, positive_response=True, factors=10,
-                          **fractions)
+                          seed=seed, **fractions)
     if verbose:
         print()
         df.show()
     return df
 
 # generate random dataset of ncolumns of Strings, copied from Pasha
-def random_dataset_strings_only(nrow, ncol):
+def random_dataset_strings_only(nrow, ncol, seed=None):
     """Create and return a random dataset."""
     fractions = dict()
     fractions["real_fraction"] = 0  # Right now we are dropping string columns, so no point in having them.
@@ -3495,10 +3669,17 @@ def random_dataset_strings_only(nrow, ncol):
     fractions["time_fraction"] = 0
     fractions["string_fraction"] = 1  # Right now we are dropping string columns, so no point in having them.
     fractions["binary_fraction"] = 0
+    return h2o.create_frame(rows=nrow, cols=ncol, missing_fraction=0, has_response=False, seed=seed, **fractions)
 
-
-    df = h2o.create_frame(rows=nrow, cols=ncol, missing_fraction=0, has_response=False, **fractions)
-    return df
+def random_dataset_all_types(nrow, ncol, seed=None):
+    fractions=dict()
+    fractions['real_fraction']=0.16,
+    fractions['categorical_fraction']=0.16,
+    fractions['integer_fraction']=0.16,
+    fractions['binary_fraction']=0.16,
+    fractions['time_fraction']=0.16,
+    fractions['string_fraction']=0.2
+    return h2o.create_frame(rows=nrow, cols=ncol, missing_fraction=0.1, has_response=False, seed=seed)
 
 # generate random dataset of ncolumns of enums only, copied from Pasha
 def random_dataset_enums_only(nrow, ncol, factorL=10, misFrac=0.01, randSeed=None):
@@ -3764,3 +3945,220 @@ def summarizeResult_binomial_DS(h2oPredictD, nativePred, h2oTrainTimeD, nativeTr
                 abs(h2oPredictLocalS['c0.l1'][ind]-nativePred[ind])<tolerance, \
             "H2O prediction prob: {0} and native XGBoost prediction prob: {1}.  They are very " \
             "different.".format(h2oPredictLocalD['c0.l1'][ind], nativePred[ind])
+
+
+def compare_weightedStats(model, dataframe, xlist, xname, weightV, pdpTDTable, tol=1e-6):
+    '''
+    This method is used to test the partial dependency plots and is not meant for any other functions.
+    
+    :param model:
+    :param dataframe:
+    :param xlist:
+    :param xname:
+    :param weightV:
+    :param pdpTDTable:
+    :param tol:
+    :return:
+    '''
+    weightStat =  manual_partial_dependence(model, dataframe, xlist, xname, weightV) # calculate theoretical weighted sts
+    wMean = extract_col_value_H2OTwoDimTable(pdpTDTable, "mean_response") # stats for age predictor
+    wStd = extract_col_value_H2OTwoDimTable(pdpTDTable, "stddev_response")
+    wStdErr = extract_col_value_H2OTwoDimTable(pdpTDTable, "std_error_mean_response")
+    equal_two_arrays(weightStat[0], wMean, tol, tol, throwError=True)
+    equal_two_arrays(weightStat[1], wStd, tol, tol, throwError=True)
+    equal_two_arrays(weightStat[2], wStdErr, tol, tol, throwError=True)
+
+
+def manual_partial_dependence(model, dataframe, xlist, xname, weightV):
+    meanV = []
+    stdV = []
+    stderrV = []
+    nRows = dataframe.nrow
+    nCols = dataframe.ncol-1
+
+    for xval in xlist:
+        cons = [xval]*nRows
+        if xname in dataframe.names:
+            dataframe=dataframe.drop(xname)
+        if not((isinstance(xval, string_types) and xval=='NA') or (isinstance(xval, float) and math.isnan(xval))):
+            dataframe = dataframe.cbind(h2o.H2OFrame(cons))
+            dataframe.set_name(nCols, xname)
+
+        pred = model.predict(dataframe).as_data_frame(use_pandas=False, header=False)
+        pIndex = len(pred[0])-1
+        sumEle = 0.0
+        sumEleSq = 0.0
+        sumWeight = 0.0
+        numNonZeroWeightCount = 0.0
+        m = 1.0/math.sqrt(dataframe.nrow*1.0)
+        for rindex in range(len(pred)):
+            val = float(pred[rindex][pIndex]);
+            weight = float(weightV[rindex][0])
+            if (abs(weight) > 0) and isinstance(val, float) and not(math.isnan(val)):
+                temp = val*weight
+                sumEle = sumEle+temp
+                sumEleSq = sumEleSq+temp*val
+                sumWeight = sumWeight+weight
+                numNonZeroWeightCount = numNonZeroWeightCount+1
+        wMean = sumEle/sumWeight
+        scale = numNonZeroWeightCount*1.0/(numNonZeroWeightCount-1)
+        wSTD = math.sqrt((sumEleSq/sumWeight-wMean*wMean)*scale)
+        meanV.append(wMean)
+        stdV.append(wSTD)
+        stderrV.append(wSTD*m)
+
+    return meanV, stdV, stderrV
+
+def compare_frames_equal_names(frame1, frame2):
+    '''
+    This method will compare two frames with same column names and column types.  The current accepted column
+    types are enum, int and string.
+
+    :param frame1:
+    :param frame2:
+    :return:
+    '''
+    cnames = frame1.names
+    ctypes = frame1.types
+    for cind in range(0, frame1.ncol):
+        name1 = cnames[cind]
+        type = str(ctypes[name1])
+
+        if (type=="enum"):
+            compare_frames_local_onecolumn_NA_enum(frame1[name1], frame2[name1], prob=1, tol=0)
+        elif (type=='string'):
+            compare_frames_local_onecolumn_NA_string(frame1[name1], frame2[name1], prob=1)
+        else:
+            compare_frames_local_onecolumn_NA(frame1[name1], frame2[name1], prob=1, tol=1e-10)
+
+def write_H2OFrame_2_SVMLight(filename, h2oFrame):
+    '''
+    The function will write a h2oFrame into svmlight format and save it to a file.  However, it only supports
+    column types of real/integer and nothing else
+    :param filename:
+    :param h2oFrame:
+    :return:
+    '''
+    fwriteFile = open(filename, 'w')
+    ncol = h2oFrame.ncol
+    nrow = h2oFrame.nrow
+    fdataframe = h2oFrame.as_data_frame(use_pandas=False)
+    for rowindex in range(1, nrow+1):
+        if len(fdataframe[rowindex][0])==0:   # special treatment for response column
+            writeWords = ""    # convert na response to 0.0
+        else:
+            writeWords = fdataframe[rowindex][0]
+
+        for colindex in range(1, ncol):
+            if not(len(fdataframe[rowindex][colindex])==0):
+                writeWords = writeWords + " "+str(colindex) + ":"+fdataframe[rowindex][colindex]
+        fwriteFile.write(writeWords)
+        fwriteFile.write('\n')
+    fwriteFile.close()
+
+def write_H2OFrame_2_ARFF(filenameWithPath, filename, h2oFrame, uuidVecs, uuidNames):
+    '''
+    This function will write a H2OFrame into arff format and save it to a text file in ARFF format.
+    :param filename:
+    :param h2oFrame:
+    :return:
+    '''
+
+    fwriteFile = open(filenameWithPath, 'w')
+    nrow = h2oFrame.nrow
+
+    # write the arff headers here
+    writeWords = "@RELATION "+filename+'\n\n'
+    fwriteFile.write(writeWords)
+
+    typesDict = h2oFrame.types
+    colnames = h2oFrame.names
+    uuidtypes = len(uuidNames)*["UUID"]
+
+    for cname in colnames:
+        writeWords = "@ATTRIBUTE "+cname
+
+        if typesDict[cname]==u'int':
+            writeWords = writeWords + " integer"
+        elif typesDict[cname]==u'time':
+            writeWords = writeWords + " date"
+        else:
+            writeWords = writeWords + " "+typesDict[cname]
+        fwriteFile.write(writeWords)
+        fwriteFile.write('\n')
+
+    for cindex in range(len(uuidNames)):
+        writeWords = "@ATTRIBUTE " +uuidNames[cindex]+" uuid"
+        fwriteFile.write(writeWords)
+        fwriteFile.write('\n')
+    fwriteFile.write("\n@DATA\n")
+
+    # write the arff body as csv
+    fdataframe = h2oFrame.as_data_frame(use_pandas=False)
+
+    for rowindex in range(1,nrow+1):
+        writeWords = ""
+        for cindex in range(h2oFrame.ncol):
+            if len(fdataframe[rowindex][cindex])>0:
+                if typesDict[colnames[cindex]]==u'time':
+                    writeWords = writeWords+\
+                                 str(datetime.datetime.fromtimestamp(float(fdataframe[rowindex][cindex])/1000.0))+","
+                elif typesDict[colnames[cindex]] in [u'enum', u'string']:
+                    writeWords=writeWords+fdataframe[rowindex][cindex]+","
+                else:
+                    writeWords=writeWords+fdataframe[rowindex][cindex]+","
+            else:
+                writeWords = writeWords + ","
+
+        # process the uuid ones
+        for cindex in range(len(uuidVecs)-1):
+            writeWords=writeWords+str(uuidVecs[cindex][rowindex-1])+","
+        writeWords=writeWords+str(uuidVecs[-1][rowindex-1])+'\n'
+        fwriteFile.write(writeWords)
+    fwriteFile.close()
+
+def checkCorrectSkips(originalFullFrame, csvfile, skipped_columns):
+    skippedFrameUF = h2o.upload_file(csvfile, skipped_columns=skipped_columns)
+    skippedFrameIF = h2o.import_file(csvfile, skipped_columns=skipped_columns)  # this two frames should be the same
+    compare_frames_local(skippedFrameUF, skippedFrameIF, prob=0.5)
+
+    skipCounter = 0
+    typeDict = originalFullFrame.types
+    frameNames = originalFullFrame.names
+    for cindex in range(len(frameNames)):
+        if cindex not in skipped_columns:
+            print("Checking column {0}...".format(cindex))
+            if typeDict[frameNames[cindex]] == u'enum':
+                compare_frames_local_onecolumn_NA_enum(originalFullFrame[cindex],
+                                                                    skippedFrameIF[skipCounter], prob=1, tol=1e-10,
+                                                                    returnResult=False)
+            elif typeDict[frameNames[cindex]] == u'string':
+                compare_frames_local_onecolumn_NA_string(originalFullFrame[cindex],
+                                                                      skippedFrameIF[skipCounter], prob=1,
+                                                                      returnResult=False)
+            else:
+                compare_frames_local_onecolumn_NA(originalFullFrame[cindex], skippedFrameIF[skipCounter],
+                                                               prob=1, tol=1e-10, returnResult=False)
+            skipCounter = skipCounter + 1
+
+
+def checkCorrectSkipsFolder(originalFullFrame, csvfile, skipped_columns):
+    skippedFrameIF = h2o.import_file(csvfile, skipped_columns=skipped_columns)  # this two frames should be the same
+    skipCounter = 0
+    typeDict = originalFullFrame.types
+    frameNames = originalFullFrame.names
+    for cindex in range(len(frameNames)):
+        if cindex not in skipped_columns:
+            print("Checking column {0}...".format(cindex))
+            if typeDict[frameNames[cindex]] == u'enum':
+                compare_frames_local_onecolumn_NA_enum(originalFullFrame[cindex],
+                                                                    skippedFrameIF[skipCounter], prob=1, tol=1e-10,
+                                                                    returnResult=False)
+            elif typeDict[frameNames[cindex]] == u'string':
+                compare_frames_local_onecolumn_NA_string(originalFullFrame[cindex],
+                                                                      skippedFrameIF[skipCounter], prob=1,
+                                                                      returnResult=False)
+            else:
+                compare_frames_local_onecolumn_NA(originalFullFrame[cindex], skippedFrameIF[skipCounter],
+                                                               prob=1, tol=1e-10, returnResult=False)
+            skipCounter = skipCounter + 1

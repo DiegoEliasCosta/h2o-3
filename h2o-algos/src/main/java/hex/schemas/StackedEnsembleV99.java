@@ -37,7 +37,8 @@ public class StackedEnsembleV99 extends ModelBuilderSchema<StackedEnsemble,Stack
       "metalearner_fold_column",
       "keep_levelone_frame",
       "metalearner_params",
-      "seed"
+      "seed",
+      "export_checkpoints_dir"
     };
 
 
@@ -104,6 +105,7 @@ public class StackedEnsembleV99 extends ModelBuilderSchema<StackedEnsemble,Stack
             GLMV3.GLMParametersV3 paramsAuto = new GLMV3.GLMParametersV3();
             paramsAuto.init_meta();
             paramsAuto.fillFromImpl(new GLMModel.GLMParameters());
+            paramsAuto.fillFromParms(p, true);
             GLMModel.GLMParameters autoParams = paramsAuto.createAndFillImpl();
             impl._metalearner_parameters = autoParams;
             super.fillImpl(impl);

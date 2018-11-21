@@ -3,6 +3,7 @@ package hex.genmodel.algos.xgboost;
 import hex.genmodel.ModelMojoReader;
 
 import java.io.IOException;
+import java.util.Arrays;
 
 /**
  */
@@ -23,6 +24,7 @@ public class XGBoostMojoReader extends ModelMojoReader<XGBoostMojoModel> {
     if (exists("feature_map")) {
       _model._featureMap = new String(readblob("feature_map"), "UTF-8");
     }
+    _model.postReadInit();
   }
 
   @Override
@@ -42,6 +44,10 @@ public class XGBoostMojoReader extends ModelMojoReader<XGBoostMojoModel> {
 
   public static boolean useJavaScoring() {
     return Boolean.getBoolean("sys.ai.h2o.xgboost.scoring.java.enable");
+  }
+
+  @Override public String mojoVersion() {
+    return "1.00";
   }
 
 }

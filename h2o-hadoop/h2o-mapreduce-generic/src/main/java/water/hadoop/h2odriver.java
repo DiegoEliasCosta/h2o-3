@@ -5,7 +5,12 @@ import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
-import org.apache.hadoop.mapreduce.*;
+import org.apache.hadoop.mapreduce.InputFormat;
+import org.apache.hadoop.mapreduce.InputSplit;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.JobContext;
+import org.apache.hadoop.mapreduce.RecordReader;
+import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.NullOutputFormat;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -13,20 +18,51 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import water.H2O;
 import water.H2OStarter;
-import water.JettyProxy;
 import water.ProxyStarter;
 import water.network.SecurityUtils;
+import water.server.Credentials;
 import water.util.ArrayUtils;
 import water.util.StringUtils;
 
-import java.io.*;
-import java.net.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Writer;
+import java.lang.reflect.Method;
+import java.net.BindException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketException;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.lang.reflect.Method;
+
+import static water.util.JavaVersionUtils.JAVA_VERSION;
 
 /**
  * Driver class to start a Hadoop mapreduce job which wraps an H2O cluster launch.
@@ -47,15 +83,10 @@ public class h2odriver extends Configured implements Tool {
   final static String DRIVER_JOB_CALL_TIMEOUT_SEC = "ai.h2o.driver.call.timeout";
 
   static {
-    String javaVersionString = System.getProperty("java.version");
-    Pattern p = Pattern.compile("1\\.([0-9]*)(.*)");
-    Matcher m = p.matcher(javaVersionString);
-    boolean b = m.matches();
-    if (! b) {
-      System.out.println("Could not parse java version: " + javaVersionString);
-      System.exit(1);
-    }
-    javaMajorVersion = Integer.parseInt(m.group(1));
+      if(!JAVA_VERSION.isKnown()) {
+          System.err.println("Couldn't parse Java version: " + System.getProperty("java.version"));
+          System.exit(1);
+      }
   }
 
   final static int DEFAULT_CLOUD_FORMATION_TIMEOUT_SECONDS = 120;
@@ -63,7 +94,6 @@ public class h2odriver extends Configured implements Tool {
   final static int DEFAULT_EXTRA_MEM_PERCENT = 10;
 
   // Options that are parsed by the main thread before other threads are created.
-  static final int javaMajorVersion;
   static String jobtrackerName = null;
   static int numNodes = -1;
   static String outputPath = null;
@@ -233,23 +263,33 @@ public class h2odriver extends Configured implements Tool {
     H2ORecordReader() {
     }
 
+    @Override
     public void initialize(InputSplit split, TaskAttemptContext context) {
     }
 
+    @Override
     public boolean nextKeyValue() throws IOException {
       return false;
     }
 
+    @Override
     public Text getCurrentKey() { return null; }
+    @Override
     public Text getCurrentValue() { return null; }
+    @Override
     public void close() throws IOException { }
+    @Override
     public float getProgress() throws IOException { return 0; }
   }
 
   public static class EmptySplit extends InputSplit implements Writable {
+    @Override
     public void write(DataOutput out) throws IOException { }
+    @Override
     public void readFields(DataInput in) throws IOException { }
+    @Override
     public long getLength() { return 0L; }
+    @Override
     public String[] getLocations() { return new String[0]; }
   }
 
@@ -257,6 +297,7 @@ public class h2odriver extends Configured implements Tool {
     H2OInputFormat() {
     }
 
+    @Override
     public List<InputSplit> getSplits(JobContext context) throws IOException, InterruptedException {
       List<InputSplit> ret = new ArrayList<InputSplit>();
       int numSplits = numNodes;
@@ -266,6 +307,7 @@ public class h2odriver extends Configured implements Tool {
       return ret;
     }
 
+    @Override
     public RecordReader<Text, Text> createRecordReader(
             InputSplit ignored, TaskAttemptContext taskContext)
             throws IOException {
@@ -597,6 +639,8 @@ public class h2odriver extends Configured implements Tool {
                     "          [-ea]\n" +
                     "          [-verbose:gc]\n" +
                     "          [-XX:+PrintGCDetails]\n" +
+                    "          [-XX:+PrintGCTimeStamps]\n" +
+                    "          [-Xlog:gc=info]\n" +
                     "          [-license <license file name (local filesystem, not hdfs)>]\n" +
                     "          [-o | -output <hdfs output dir>]\n" +
                     "\n" +
@@ -630,6 +674,9 @@ public class h2odriver extends Configured implements Tool {
                     "             The file contains one line with the IP and port of the embedded\n" +
                     "             web server for one of the H2O nodes in the cluster.  e.g.\n" +
                     "                 192.168.1.100:54321\n" +
+                    "          o  Flags [-verbose:gc], [-XX:+PrintGCDetails] and [-XX:+PrintGCTimeStamps]" +
+                    "             are deperacated in Java 9 and removed in Java 10." +
+                    "             The option [-Xlog:gc=info] replaces these flags since Java 9." +
                     "          o  All mappers must start before the H2O cloud is considered up.\n" +
                     "\n" +
                     "Examples:\n" +
@@ -854,8 +901,18 @@ public class h2odriver extends Configured implements Tool {
       else if (s.equals("-ea")) {
         enableExceptions = true;
       }
-      else if (s.equals("-verbose:gc")) {
-        enableVerboseGC = true;
+      else if (s.equals("-verbose:gc") && !JAVA_VERSION.useUnifiedLogging()) {
+        if (!JAVA_VERSION.useUnifiedLogging()) {
+          enableVerboseGC = true;
+        } else {
+          error("Parameter -verbose:gc is unusable, running on JVM with deprecated GC debugging flags.");
+        }
+      } else if (s.equals("-Xlog:gc=info")) {
+        if (JAVA_VERSION.useUnifiedLogging()) {
+          enableVerboseGC = true;
+        } else {
+          error("Parameter -verbose:gc is unusable, running on JVM without unified JVM logging.");
+        }
       }
       else if (s.equals("-verbose:class")) {
         enableVerboseClass = true;
@@ -881,12 +938,19 @@ public class h2odriver extends Configured implements Tool {
         if ((debugPort < 0) || (debugPort > 65535)) {
           error("Debug port must be between 1 and 65535");
         }
-      }
-      else if (s.equals("-XX:+PrintGCDetails")) {
-        enablePrintGCDetails = true;
+      } else if (s.equals("-XX:+PrintGCDetails")) {
+        if (!JAVA_VERSION.useUnifiedLogging()) {
+          enablePrintGCDetails = true;
+        } else {
+          error("Parameter -XX:+PrintGCDetails is unusable, running on JVM with deprecated GC debugging flags.");
+        }
       }
       else if (s.equals("-XX:+PrintGCTimeStamps")) {
-        enablePrintGCTimeStamps = true;
+        if (!JAVA_VERSION.useUnifiedLogging()) {
+          enablePrintGCDetails = true;
+        } else {
+          error("Parameter -XX:+PrintGCTimeStamps is unusable, running on JVM with deprecated GC debugging flags.");
+        }
       }
       else if (s.equals("-gc")) {
         enableVerboseGC = true;
@@ -1322,7 +1386,7 @@ public class h2odriver extends Configured implements Tool {
     // PermSize
     // Java 7 and below need a larger PermSize for H2O.
     // Java 8 no longer has PermSize, but rather MetaSpace, which does not need to be set at all.
-    if (javaMajorVersion <= 7) {
+    if (JAVA_VERSION.getMajor() <= 7) {
       mapperPermSize = "256m";
     }
 
@@ -1403,7 +1467,8 @@ public class h2odriver extends Configured implements Tool {
               .append(" -Xmx").append(mapperXmx)
               .append(((mapperPermSize != null) && (mapperPermSize.length() > 0)) ? (" -XX:PermSize=" + mapperPermSize) : "")
               .append((enableExceptions ? " -ea" : ""))
-              .append((enableVerboseGC ? " -verbose:gc" : ""))
+              .append((enableVerboseGC && !JAVA_VERSION.useUnifiedLogging() ? " -verbose:gc" : ""))
+              .append(enableVerboseGC && JAVA_VERSION.useUnifiedLogging() ? "-Xlog:gc=info" : "")
               .append((enablePrintGCDetails ? " -XX:+PrintGCDetails" : ""))
               .append((enablePrintGCTimeStamps ? " -XX:+PrintGCTimeStamps" : ""))
               .append((enableVerboseClass ? " -verbose:class" : ""))
@@ -1516,7 +1581,7 @@ public class h2odriver extends Configured implements Tool {
     }
 
     // Proxy
-    final JettyProxy.Credentials proxyCredentials = proxy ? JettyProxy.Credentials.make(userName) : null;
+    final Credentials proxyCredentials = proxy ? Credentials.make(userName) : null;
     if (proxyCredentials != null) {
       final byte[] hashFileData = StringUtils.bytesOf(proxyCredentials.toHashFileEntry());
       addMapperArg(conf, "-hash_login");

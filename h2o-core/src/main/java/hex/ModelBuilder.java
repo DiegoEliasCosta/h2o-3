@@ -3,6 +3,8 @@ package hex;
 import hex.genmodel.utils.DistributionFamily;
 import jsr166y.CountedCompleter;
 import water.*;
+import water.api.FSIOException;
+import water.api.HDFSIOException;
 import water.exceptions.H2OIllegalArgumentException;
 import water.exceptions.H2OModelBuilderIllegalArgumentException;
 import water.fvec.*;
@@ -10,6 +12,7 @@ import water.rapids.ast.prims.advmath.AstKFold;
 import water.udf.CFuncRef;
 import water.util.*;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.*;
 
@@ -213,6 +216,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
         Scope.enter();
         _parms.read_lock_frames(_job); // Fetch & read-lock input frames
         computeImpl();
+        saveModelCheckpointIfConfigured();
       } finally {
         setFinalState();
         _parms.read_unlock_frames(_job);
@@ -231,6 +235,63 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     if (res != null && res._output != null) {
       res._output._job = _job;
       res._output.stopClock();
+    }
+  }
+
+  private void saveModelCheckpointIfConfigured() {
+    Model model = _result.get();
+    if (model != null && !StringUtils.isNullOrEmpty(model._parms._export_checkpoints_dir)) {
+      try {
+        model.exportBinaryModel(model._parms._export_checkpoints_dir + "/" + model._key.toString(), true);
+      } catch (FSIOException | HDFSIOException | IOException e) {
+        throw new H2OIllegalArgumentException("export_checkpoints_dir", "saveModelIfConfigured", e);
+      }
+    }
+  }
+
+  /**
+   * Start model training using a this ModelBuilder as a template. The MB can be either used directly
+   * or if the method was invoked on a regular H2O node. If the method was called on a client node, the model builder
+   * will be used as a template only and the actual instance used for training will re-created on a remote H2O node.
+   *
+   * Warning: the nature of this method prohibits further use of this instance of the model builder after the method
+   *          is called.
+   *
+   * This is intended to reduce training time in client-mode setups, it pushes all computation to a regular H2O node
+   * and avoid exchanging data between client and H2O cluster. This also lowers requirements on the H2O client node.
+   *
+   * @return model job
+   */
+  public Job<M> trainModelOnH2ONode() {
+    if (H2O.ARGS.client) {
+      if (error_count() > 0)
+        throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(this);
+      RemoteTrainModelTask tmt = new RemoteTrainModelTask(_job, _job._result, _parms);
+      H2ONode leader = H2O.CLOUD.leader();
+      new RPC<>(leader, tmt).call().get();
+      return _job;
+    } else {
+      return trainModel(); // use directly
+    }
+  }
+
+  private static class RemoteTrainModelTask extends DTask<RemoteTrainModelTask> {
+    private Job<Model> _job;
+    private Key<Model> _key;
+    private Model.Parameters _parms;
+    @SuppressWarnings("unchecked")
+    private RemoteTrainModelTask(Job job, Key key, Model.Parameters parms) {
+      _job = (Job<Model>) job;
+      _key = (Key<Model>) key;
+      _parms = parms;
+    }
+    @Override
+    public void compute2() {
+      ModelBuilder mb = ModelBuilder.make(_parms.algoName(), _job, _key);
+      mb._parms = _parms;
+      mb.init(false); // validate parameters
+      mb.trainModel();
+      tryComplete();
     }
   }
 
@@ -320,6 +381,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     _job.setReadyForView(false); //wait until the main job starts to let the user inspect the main job
     final Integer N = nFoldWork();
     init(false);
+    ModelBuilder<M, P, O>[] cvModelBuilders = null;
     try {
       Scope.enter();
 
@@ -327,10 +389,10 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       final Vec foldAssignment = cv_AssignFold(N);
 
       // Step 2: Make 2*N binary weight vectors
-      final Vec[] weights = cv_makeWeights(N,foldAssignment);
+      final Vec[] weights = cv_makeWeights(N, foldAssignment);
 
       // Step 3: Build N train & validation frames; build N ModelBuilders; error check them all
-      ModelBuilder<M, P, O> cvModelBuilders[] = cv_makeFramesAndBuilders(N,weights);
+      cvModelBuilders = cv_makeFramesAndBuilders(N, weights);
 
       // Step 4: Run all the CV models
       cv_buildModels(N, cvModelBuilders);
@@ -345,13 +407,29 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       // scores; compute gains/lifts
       cv_mainModelScores(N, mbs, cvModelBuilders);
 
-      // Step 8: Clean up potentially created temp frames
-      for (ModelBuilder mb : cvModelBuilders)
-        mb.cleanUp();
-
       _job.setReadyForView(true);
       DKV.put(_job);
+    } catch (Exception e) {
+      if (cvModelBuilders != null) {
+        Futures fs = new Futures();
+        // removing keys added during cv_makeFramesAndBuilders and cv_makeFramesAndBuilders
+        // need a better solution: part of this is done in cv_makeFramesAndBuilders but partially and only for its method scope
+        // also removing the completed CV models as the main model is incomplete anyway
+        for (ModelBuilder mb : cvModelBuilders) {
+          DKV.remove(mb._parms._train, fs);
+          DKV.remove(mb._parms._valid, fs);
+          DKV.remove(Key.make(mb.getPredictionKey()), fs);
+          mb._result.remove(fs);
+        }
+        fs.blockForPending();
+      }
+      throw e;
     } finally {
+      if (cvModelBuilders != null) {
+        for (ModelBuilder mb : cvModelBuilders) {
+          mb.cleanUp();
+        }
+      }
       cleanUp();
       Scope.exit();
     }
@@ -501,7 +579,8 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     RuntimeException rt = null;
     for( int i=0; i<N; ++i ) {
       if (job.stop_requested() ) {
-        Log.info("Skipping last "+(N-i)+" out of "+N+" "+modelType+" models");
+        Log.info("Skipping build of last "+(N-i)+" out of "+N+" "+modelType+" CV models");
+        stopAll(submodel_tasks);
         throw new Job.JobCancelledException();
       }
       Log.info("Building " + modelType + " model " + (i + 1) + " / " + N + ".");
@@ -528,6 +607,14 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     if(rt != null) throw rt;
   }
 
+  private static void stopAll(H2O.H2OCountedCompleter[] tasks) {
+    for (H2O.H2OCountedCompleter task : tasks) {
+      if (task != null) {
+        task.cancel(true);
+      }
+    }
+  }
+
   // Step 5: Score the CV models
   public ModelMetrics.MetricBuilder[] cv_scoreCVModels(int N, Vec[] weights, ModelBuilder<M, P, O>[] cvModelBuilders) {
     if (_job.stop_requested()) {
@@ -542,6 +629,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     Futures fs = new Futures();
     for (int i=0; i<N; ++i) {
       if (_job.stop_requested()) {
+        Log.info("Skipping scoring for last "+(N-i)+" out of "+N+" CV models");
         throw new Job.JobCancelledException();
       }
       Frame cvValid = cvModelBuilders[i].valid();
@@ -552,7 +640,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       if (nclasses() == 2 /* need holdout predictions for gains/lift table */
               || _parms._keep_cross_validation_predictions
               || (_parms._distribution== DistributionFamily.huber /*need to compute quantiles on abs error of holdout predictions*/)) {
-        String predName = "prediction_" + cvModelBuilders[i]._result.toString();
+        String predName = cvModelBuilders[i].getPredictionKey();
         cvModel.predictScoreImpl(cvValid, adaptFr, predName, _job, true, CFuncRef.NOP);
         DKV.put(cvModel);
       }
@@ -590,16 +678,17 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
 
     // Compute and put the cross-validation metrics into the main model
     Log.info("Computing "+N+"-fold cross-validation metrics.");
-    mainModel._output._cross_validation_models = new Key[N];
+    Key<M>[] cvModKeys = new Key[N];
+    mainModel._output._cross_validation_models = _parms._keep_cross_validation_models ? cvModKeys : null;
     Key<Frame>[] predKeys = new Key[N];
     mainModel._output._cross_validation_predictions = _parms._keep_cross_validation_predictions ? predKeys : null;
 
     for (int i = 0; i < N; ++i) {
       if (i > 0) mbs[0].reduce(mbs[i]);
-      Key<M> cvModelKey = cvModelBuilders[i]._result;
-      mainModel._output._cross_validation_models[i] = cvModelKey;
-      predKeys[i] = Key.make("prediction_" + cvModelKey.toString()); //must be the same as in cv_scoreCVModels above
+      cvModKeys[i] = cvModelBuilders[i]._result;
+      predKeys[i] = Key.make(cvModelBuilders[i].getPredictionKey());
     }
+
     Frame holdoutPreds = null;
     if (_parms._keep_cross_validation_predictions || (nclasses()==2 /*GainsLift needs this*/ || _parms._distribution == DistributionFamily.huber)) {
       Key<Frame> cvhp = Key.make("cv_holdout_prediction_" + mainModel._key.toString());
@@ -614,13 +703,16 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
         Scope.untrack(xvalidation_fold_assignment_frame.keysList());
     }
     // Keep or toss predictions
-    for (Key<Frame> k : predKeys) {
-      Frame fr = DKV.getGet(k);
-      if( fr != null ) {
-        if (_parms._keep_cross_validation_predictions) Scope.untrack(fr.keysList());
-        else fr.remove();
+    if (_parms._keep_cross_validation_predictions) {
+      for (Key<Frame> k : predKeys) {
+        Frame fr = DKV.getGet(k);
+        if (fr != null) Scope.untrack(fr.keysList());
       }
+    } else {
+      int count = Model.deleteAll(predKeys);
+      Log.info(count+" CV predictions were removed");
     }
+
     mainModel._output._cross_validation_metrics = mbs[0].makeModelMetrics(mainModel, _parms.train(), null, holdoutPreds);
     if (holdoutPreds != null) {
       if (_parms._keep_cross_validation_predictions) Scope.untrack(holdoutPreds.keysList());
@@ -628,11 +720,19 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     }
     mainModel._output._cross_validation_metrics._description = N + "-fold cross-validation on training data (Metrics computed for combined holdout predictions)";
     Log.info(mainModel._output._cross_validation_metrics.toString());
+    mainModel._output._cross_validation_metrics_summary = makeCrossValidationSummaryTable(cvModKeys);
 
-    mainModel._output._cross_validation_metrics_summary = makeCrossValidationSummaryTable(mainModel._output._cross_validation_models);
+    if (!_parms._keep_cross_validation_models) {
+      int count = Model.deleteAll(cvModKeys);
+      Log.info(count+" CV models were removed");
+    }
 
     // Now, the main model is complete (has cv metrics)
     DKV.put(mainModel);
+  }
+
+  private String getPredictionKey() {
+    return "prediction_"+_result.toString();
   }
 
   /** Override for model-specific checks / modifications to _parms for the main model during N-fold cross-validation.
@@ -655,7 +755,22 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
    *  visible but with a note in the UI) or is it experimental (hidden by
    *  default, visible in the UI if the user gives an "experimental" flag at
    *  startup); test-only builders are "experimental"  */
-  public enum BuilderVisibility { Experimental, Beta, Stable }
+  public enum BuilderVisibility {
+    Experimental, Beta, Stable;
+    /**
+     * @param value A value to search for among {@link BuilderVisibility}'s values
+     * @return A member of {@link BuilderVisibility}, if found.
+     * @throws IllegalArgumentException If given value is not found among members of {@link BuilderVisibility} enum.
+     */
+    public static BuilderVisibility valueOfIgnoreCase(final String value) throws IllegalArgumentException {
+      final BuilderVisibility[] values = values();
+      for (int i = 0; i < values.length; i++) {
+        if (values[i].name().equalsIgnoreCase(value)) return values[i];
+      }
+      throw new IllegalArgumentException(String.format("Algorithm availability level of '%s' is not known. Available levels: %s",
+              value, Arrays.toString(values)));
+    }
+  }
   public BuilderVisibility builderVisibility() { return BuilderVisibility.Stable; }
 
   /** Clear whatever was done by init() so it can be run again. */
@@ -971,6 +1086,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     }
     // hide cross-validation parameters unless cross-val is enabled
     if (!nFoldCV()) {
+      hide("_keep_cross_validation_models", "Only for cross-validation.");
       hide("_keep_cross_validation_predictions", "Only for cross-validation.");
       hide("_keep_cross_validation_fold_assignment", "Only for cross-validation.");
       hide("_fold_assignment", "Only for cross-validation.");
@@ -994,13 +1110,26 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       if( expensive ) Log.info("Dropping ignored columns: "+Arrays.toString(_parms._ignored_columns));
     }
 
-    // Drop all non-numeric columns (e.g., String and UUID).  No current algo
-    // can use them, and otherwise all algos will then be forced to remove
-    // them.  Text algos (grep, word2vec) take raw text columns - which are
-    // numeric (arrays of bytes).
-    ignoreBadColumns(separateFeatureVecs(), expensive);
-    ignoreInvalidColumns(separateFeatureVecs(), expensive);
-    checkResponseVariable();
+    if(_parms._checkpoint != null){
+      if(DKV.get(_parms._checkpoint) == null){
+          error("_checkpoint", "Checkpoint has to point to existing model!");
+      }
+      // Do not ignore bad columns, as only portion of the training data might be supplied (e.g. continue from checkpoint)
+      final Model checkpointedModel = _parms._checkpoint.get();
+      final String[] warnings = checkpointedModel.adaptTestForTrain(_train, expensive, false);
+      for (final String warning : warnings){
+          warn("_checkpoint", warning);
+      }
+      separateFeatureVecs(); // set MB's fields (like response)
+    } else {
+      // Drop all non-numeric columns (e.g., String and UUID).  No current algo
+      // can use them, and otherwise all algos will then be forced to remove
+      // them.  Text algos (grep, word2vec) take raw text columns - which are
+      // numeric (arrays of bytes).
+      ignoreBadColumns(separateFeatureVecs(), expensive);
+      ignoreInvalidColumns(separateFeatureVecs(), expensive);
+      checkResponseVariable();
+    }
 
     // Rebalance train and valid datasets (after invalid/bad columns are dropped)
     if (expensive && error_count() == 0 && _parms._auto_rebalance) {
@@ -1010,8 +1139,8 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     }
 
     // Check that at least some columns are not-constant and not-all-NAs
-    if( _train.numCols() == 0 )
-      error("_train","There are no usable columns to generate model");
+    if (_train.numCols() == 0)
+      error("_train", "There are no usable columns to generate model");
 
     if(isSupervised()) {
       if(_response != null) {
@@ -1149,10 +1278,6 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
         assert(ArrayUtils.contains(_valid._names, name)) : "Internal error during categorical encoding: training column " + name + " not in validation frame with columns " + Arrays.toString(_valid._names);
     }
 
-    if (_parms._checkpoint != null && DKV.get(_parms._checkpoint) == null) {
-      error("_checkpoint", "Checkpoint has to point to existing model!");
-    }
-
     if (_parms._stopping_tolerance < 0) {
       error("_stopping_tolerance", "Stopping tolerance must be >= 0.");
     }
@@ -1185,6 +1310,11 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     }
     if (_parms._max_runtime_secs < 0) {
       error("_max_runtime_secs", "Max runtime (in seconds) must be greater than 0 (or 0 for unlimited).");
+    }
+    if (!StringUtils.isNullOrEmpty(_parms._export_checkpoints_dir)) {
+      if(!H2O.getPM().isWritableDirectory(_parms._export_checkpoints_dir)) {
+        error("_export_checkpoints_dir", "Checpoints directory path must point to a writable path.");
+      }
     }
   }
 

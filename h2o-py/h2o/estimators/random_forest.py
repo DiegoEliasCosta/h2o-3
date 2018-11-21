@@ -23,17 +23,18 @@ class H2ORandomForestEstimator(H2OEstimator):
     def __init__(self, **kwargs):
         super(H2ORandomForestEstimator, self).__init__()
         self._parms = {}
-        names_list = {"model_id", "training_frame", "validation_frame", "nfolds", "keep_cross_validation_predictions",
-                      "keep_cross_validation_fold_assignment", "score_each_iteration", "score_tree_interval",
-                      "fold_assignment", "fold_column", "response_column", "ignored_columns", "ignore_const_cols",
-                      "offset_column", "weights_column", "balance_classes", "class_sampling_factors",
-                      "max_after_balance_size", "max_confusion_matrix_size", "max_hit_ratio_k", "ntrees", "max_depth",
-                      "min_rows", "nbins", "nbins_top_level", "nbins_cats", "r2_stopping", "stopping_rounds",
-                      "stopping_metric", "stopping_tolerance", "max_runtime_secs", "seed", "build_tree_one_node",
-                      "mtries", "sample_rate", "sample_rate_per_class", "binomial_double_trees", "checkpoint",
+        names_list = {"model_id", "training_frame", "validation_frame", "nfolds", "keep_cross_validation_models",
+                      "keep_cross_validation_predictions", "keep_cross_validation_fold_assignment",
+                      "score_each_iteration", "score_tree_interval", "fold_assignment", "fold_column",
+                      "response_column", "ignored_columns", "ignore_const_cols", "offset_column", "weights_column",
+                      "balance_classes", "class_sampling_factors", "max_after_balance_size",
+                      "max_confusion_matrix_size", "max_hit_ratio_k", "ntrees", "max_depth", "min_rows", "nbins",
+                      "nbins_top_level", "nbins_cats", "r2_stopping", "stopping_rounds", "stopping_metric",
+                      "stopping_tolerance", "max_runtime_secs", "seed", "build_tree_one_node", "mtries", "sample_rate",
+                      "sample_rate_per_class", "binomial_double_trees", "checkpoint",
                       "col_sample_rate_change_per_level", "col_sample_rate_per_tree", "min_split_improvement",
                       "histogram_type", "categorical_encoding", "calibrate_model", "calibration_frame", "distribution",
-                      "custom_metric_func"}
+                      "custom_metric_func", "export_checkpoints_dir"}
         if "Lambda" in kwargs: kwargs["lambda_"] = kwargs.pop("Lambda")
         for pname, pvalue in kwargs.items():
             if pname == 'model_id':
@@ -88,6 +89,21 @@ class H2ORandomForestEstimator(H2OEstimator):
     def nfolds(self, nfolds):
         assert_is_type(nfolds, None, int)
         self._parms["nfolds"] = nfolds
+
+
+    @property
+    def keep_cross_validation_models(self):
+        """
+        Whether to keep the cross-validation models.
+
+        Type: ``bool``  (default: ``True``).
+        """
+        return self._parms.get("keep_cross_validation_models")
+
+    @keep_cross_validation_models.setter
+    def keep_cross_validation_models(self, keep_cross_validation_models):
+        assert_is_type(keep_cross_validation_models, None, bool)
+        self._parms["keep_cross_validation_models"] = keep_cross_validation_models
 
 
     @property
@@ -468,13 +484,14 @@ class H2ORandomForestEstimator(H2OEstimator):
         Metric to use for early stopping (AUTO: logloss for classification, deviance for regression)
 
         One of: ``"auto"``, ``"deviance"``, ``"logloss"``, ``"mse"``, ``"rmse"``, ``"mae"``, ``"rmsle"``, ``"auc"``,
-        ``"lift_top_group"``, ``"misclassification"``, ``"mean_per_class_error"``  (default: ``"auto"``).
+        ``"lift_top_group"``, ``"misclassification"``, ``"mean_per_class_error"``, ``"custom"``, ``"custom_increasing"``
+        (default: ``"auto"``).
         """
         return self._parms.get("stopping_metric")
 
     @stopping_metric.setter
     def stopping_metric(self, stopping_metric):
-        assert_is_type(stopping_metric, None, Enum("auto", "deviance", "logloss", "mse", "rmse", "mae", "rmsle", "auc", "lift_top_group", "misclassification", "mean_per_class_error"))
+        assert_is_type(stopping_metric, None, Enum("auto", "deviance", "logloss", "mse", "rmse", "mae", "rmsle", "auc", "lift_top_group", "misclassification", "mean_per_class_error", "custom", "custom_increasing"))
         self._parms["stopping_metric"] = stopping_metric
 
 
@@ -751,5 +768,20 @@ class H2ORandomForestEstimator(H2OEstimator):
     def custom_metric_func(self, custom_metric_func):
         assert_is_type(custom_metric_func, None, str)
         self._parms["custom_metric_func"] = custom_metric_func
+
+
+    @property
+    def export_checkpoints_dir(self):
+        """
+        Automatically export generated models to this directory.
+
+        Type: ``str``.
+        """
+        return self._parms.get("export_checkpoints_dir")
+
+    @export_checkpoints_dir.setter
+    def export_checkpoints_dir(self, export_checkpoints_dir):
+        assert_is_type(export_checkpoints_dir, None, str)
+        self._parms["export_checkpoints_dir"] = export_checkpoints_dir
 
 

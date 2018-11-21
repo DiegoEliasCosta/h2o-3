@@ -1,9 +1,13 @@
 package water.util;
 
-import java.util.*;
-import java.util.Map.Entry;
+import water.H2O;
+import water.Iced;
+import water.MRTask;
 
-import water.*;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.TreeMap;
 
 public class JStackCollectorTask extends MRTask<JStackCollectorTask> {
   JStackCollectorTask() { super(H2O.MIN_HI_PRIORITY); }
@@ -60,7 +64,7 @@ public class JStackCollectorTask extends MRTask<JStackCollectorTask> {
   // bruteforce search for H2O Servlet, don't call until other obvious cases were filtered out
   private int isH2OHTTPRequestThread(StackTraceElement [] elms){
     for(int i = 0; i < elms.length; ++i)
-      if(elms[i].getClassName().equals("water.JettyHTTPD$H2oDefaultServlet"))
+      if(elms[i].getClassName().equals("....JettyHTTPD$H2oDefaultServlet")) //TODO FIXME! No such class(H2oDefaultServlet) exists there now! Use class comparison if another one took the role.
         return i;
     return elms.length;
   }
@@ -119,7 +123,7 @@ public class JStackCollectorTask extends MRTask<JStackCollectorTask> {
         }
         trace = tcp_traces;
         tinfo = tcpThreads;
-      } else if(elms[elms.length-1].getClassName().equals("water.MultiReceiverThread") || elms[elms.length-1].getClassName().equals("water.TCPReceiverThread") || elms[elms.length-1].getClassName().equals("water.UDPReceiverThread") || elms[elms.length-1].getClassName().equals("water.HeartBeatThread")){
+      } else if(elms[elms.length-1].getClassName().equals("water.MultiReceiverThread") || elms[elms.length-1].getClassName().equals("water.TCPReceiverThread") || elms[elms.length-1].getClassName().equals("water.HeartBeatThread")){
         trace = h2o_sys_traces;
         tinfo = h2oSysThreads;
       } else if(elms.length > 1 && elms[elms.length-2].getClassName().startsWith("java.util.concurrent.ThreadPoolExecutor") || elms[elms.length-1].getClassName().startsWith("java.lang.ref.Finalizer") || elms[elms.length-1].getClassName().startsWith("java.lang.ref.Reference")) {

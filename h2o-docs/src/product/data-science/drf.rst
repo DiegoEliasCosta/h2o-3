@@ -109,7 +109,7 @@ Defining a DRF Model
 
 -  `ntrees <algo-params/ntrees.html>`__: Specify the number of trees.
 
--  `max_depth <algo-params/max_depth.html>`__: Specify the maximum tree depth.
+-  `max_depth <algo-params/max_depth.html>`__: Specify the maximum tree depth. Higher values will make the model more complex and can lead to overfitting. Setting this value to 0 specifies no limit. This value defaults to 20. 
 
 -  `min_rows <algo-params/min_rows.html>`__: Specify the minimum number of observations for a leaf
    (``nodesize`` in R).
@@ -223,6 +223,7 @@ Defining a DRF Model
 
   - ``auto`` or ``AUTO``: Allow the algorithm to decide (default). In DRF, the algorithm will automatically perform ``enum`` encoding.
   - ``enum`` or ``Enum``: 1 column per categorical feature
+  - ``enum_limited`` or ``EnumLimited``: Automatically reduce categorical levels to the most prevalent ones during Aggregator training and only keep the **T** most frequent levels.
   - ``one_hot_explicit`` or ``OneHotExplicit``: N+1 new columns for categorical features with N levels
   - ``binary`` or ``Binary``: No more than 32 columns per categorical feature
   - ``eigen`` or ``Eigen``: *k* columns per categorical feature, keeping projections of one-hot-encoded matrix onto *k*-dim eigen space only
@@ -288,7 +289,7 @@ FAQ
 -  **What happens when you try to predict on a categorical level not
    seen during training?**
 
-  DRF converts a new categorical level to a NA value in the test set, and then splits left on the NA value during scoring. The algorithm splits left on NA values because, during training, NA values are grouped with the outliers in the left-most bin.
+  Unseen categorical levels are turned into NAs, and thus follow the same behavior as an NA. If there are no NAs in the training data, then unseen categorical levels in the test data follow the majority direction (the direction with the most observations). If there are NAs in the training data, then unseen categorical levels in the test data follow the direction that is optimal for the NAs of the training data.
 
 -  **Does it matter if the data is sorted?**
 

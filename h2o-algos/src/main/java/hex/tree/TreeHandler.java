@@ -1,12 +1,15 @@
 package hex.tree;
 
+import hex.Model;
 import hex.ModelCategory;
+import hex.genmodel.algos.tree.SharedTreeGraph;
 import hex.genmodel.algos.tree.SharedTreeNode;
 import hex.genmodel.algos.tree.SharedTreeSubgraph;
+import hex.genmodel.algos.tree.SharedTreeGraphConverter;
 import hex.schemas.TreeV3;
+import water.Keyed;
 import water.MemoryManager;
 import water.api.Handler;
-
 import java.util.*;
 
 /**
@@ -16,13 +19,38 @@ public class TreeHandler extends Handler {
     private static final int NO_CHILD = -1;
 
     public TreeV3 getTree(final int version, final TreeV3 args) {
-        final SharedTreeModel model = (SharedTreeModel) args.model.key().get();
-        if (model == null) throw new IllegalArgumentException("Given model does not exist: " + args.model.key().toString());
-        final SharedTreeModel.SharedTreeOutput sharedTreeOutput = (SharedTreeModel.SharedTreeOutput) model._output;
-        final int treeClass = getResponseLevelIndex(args.tree_class, sharedTreeOutput);
-        validateArgs(args, sharedTreeOutput, treeClass);
 
-        final SharedTreeSubgraph sharedTreeSubgraph = model.getSharedTreeSubgraph(args.tree_number, treeClass);
+        if (args.tree_number < 0) {
+            throw new IllegalArgumentException("Invalid tree number: " + args.tree_number + ". Tree number must be >= 0.");
+        }
+
+        final Keyed possibleModel = args.model.key().get();
+        if (possibleModel == null) throw new IllegalArgumentException("Given model does not exist: " + args.model.key().toString());
+
+        else if (!(possibleModel instanceof SharedTreeModel) && !(possibleModel instanceof SharedTreeGraphConverter)) {
+            throw new IllegalArgumentException("Given model is not tree-based.");
+        }
+        final SharedTreeSubgraph sharedTreeSubgraph;
+
+        if (possibleModel instanceof SharedTreeGraphConverter) {
+            final SharedTreeGraphConverter treeBackedModel = (SharedTreeGraphConverter) possibleModel;
+            final SharedTreeGraph sharedTreeGraph = treeBackedModel.convert(args.tree_number, args.tree_class);
+            assert sharedTreeGraph.subgraphArray.size() == 1;
+            sharedTreeSubgraph = sharedTreeGraph.subgraphArray.get(0);
+
+            if (! ((Model)possibleModel)._output.isClassifier()) {
+                args.tree_class = null; // Class may not be provided by the user, should be always filled correctly on output. NULL for regression.
+            }
+        } else {
+            final SharedTreeModel model = (SharedTreeModel) possibleModel;
+            final SharedTreeModel.SharedTreeOutput sharedTreeOutput = (SharedTreeModel.SharedTreeOutput) model._output;
+            final int treeClass = getResponseLevelIndex(args.tree_class, sharedTreeOutput);
+            sharedTreeSubgraph = model.getSharedTreeSubgraph(args.tree_number, treeClass);
+            // Class may not be provided by the user, should be always filled correctly on output. NULL for regression.
+            args.tree_class = sharedTreeOutput.isClassifier() ? sharedTreeOutput.classNames()[treeClass] : null;
+        }
+
+
         final TreeProperties treeProperties = convertSharedTreeSubgraph(sharedTreeSubgraph);
 
         args.left_children = treeProperties._leftChildren;
@@ -33,58 +61,39 @@ public class TreeHandler extends Handler {
         args.features = treeProperties._features;
         args.nas = treeProperties._nas;
         args.levels = treeProperties.levels;
-        // Class may not be provided by the user, should be always filled correctly on output. NULL for regression.
-        if (ModelCategory.Regression.equals(sharedTreeOutput.getModelCategory())) {
-            args.tree_class = null;
-        } else {
-            args.tree_class = sharedTreeOutput._domains[sharedTreeOutput.responseIdx()][treeClass];
-        }
+        args.predictions = treeProperties._predictions;
 
         return args;
     }
 
     private static int getResponseLevelIndex(final String categorical, final SharedTreeModel.SharedTreeOutput sharedTreeOutput) {
-        final String[] responseColumnDomain = sharedTreeOutput._domains[sharedTreeOutput.responseIdx()];
-        final String trimmedCategorical = categorical.trim(); // Trim the categorical once - input from the user
+        final String trimmedCategorical = categorical != null ? categorical.trim() : ""; // Trim the categorical once - input from the user
 
-        switch (sharedTreeOutput.getModelCategory()) {
-            case Binomial:
-                if (!trimmedCategorical.isEmpty() && !trimmedCategorical.equals(responseColumnDomain[0])) {
-                    throw new IllegalArgumentException("For binomial, only one tree class has been built per each iteration: " + responseColumnDomain[0]);
-                } else {
-                    return 0;
-                }
-            case Regression:
-                if (!trimmedCategorical.isEmpty())
-                    throw new IllegalArgumentException("There are no tree classes for regression.");
-                return 0; // There is only one tree for regression
-            default:
-                for (int i = 0; i < responseColumnDomain.length; i++) {
-                    // User is supposed to enter the name of the categorical level correctly, not ignoring case
-                    if (trimmedCategorical.equals(responseColumnDomain[i])) return i;
-                }
+        if (! sharedTreeOutput.isClassifier()) {
+            if (!trimmedCategorical.isEmpty())
+                throw new IllegalArgumentException("There are no tree classes for " + sharedTreeOutput.getModelCategory() + ".");
+            return 0; // There is only one tree for non-classification models
         }
-        return -1;
+
+        final String[] responseColumnDomain = sharedTreeOutput._domains[sharedTreeOutput.responseIdx()];
+        if (sharedTreeOutput.getModelCategory() == ModelCategory.Binomial) {
+            if (!trimmedCategorical.isEmpty() && !trimmedCategorical.equals(responseColumnDomain[0])) {
+                throw new IllegalArgumentException("For binomial, only one tree class has been built per each iteration: " + responseColumnDomain[0]);
+            } else {
+                return 0;
+            }
+        } else {
+            for (int i = 0; i < responseColumnDomain.length; i++) {
+                // User is supposed to enter the name of the categorical level correctly, not ignoring case
+                if (trimmedCategorical.equals(responseColumnDomain[i]))
+                    return i;
+            }
+            throw new IllegalArgumentException("There is no such tree class. Given categorical level does not exist in response column: " + trimmedCategorical);
+        }
     }
 
     /**
-     * @param args An instance of {@link TreeV3} input arguments to validate
-     * @param output An instance of {@link SharedTreeModel.SharedTreeOutput} to validate input arguments against
-     * @param responseLevelIndex
-     */
-    private static void validateArgs(TreeV3 args, SharedTreeModel.SharedTreeOutput output, final int responseLevelIndex) {
-        if (args.tree_number < 0) throw new IllegalArgumentException("Tree number must be greater than 0.");
-
-        if (args.tree_number > output._treeKeys.length - 1)
-            throw new IllegalArgumentException("There is no such tree.");
-
-        if (responseLevelIndex < 0)
-            throw new IllegalArgumentException("There is no such tree class. Given categorical level does not exist in response column: " + args.tree_class.trim());
-    }
-
-
-    /**
-     * Converts H2O-3's internal representation of a boosted tree in a form of {@link SharedTreeSubgraph} to a format
+     * Converts H2O-3's internal representation of a tree in a form of {@link SharedTreeSubgraph} to a format
      * expected by H2O clients.
      *
      * @param sharedTreeSubgraph An instance of {@link SharedTreeSubgraph} to convert
@@ -101,6 +110,7 @@ public class TreeHandler extends Handler {
         treeprops._thresholds = MemoryManager.malloc4f(sharedTreeSubgraph.nodesArray.size());
         treeprops._features = new String[sharedTreeSubgraph.nodesArray.size()];
         treeprops._nas = new String[sharedTreeSubgraph.nodesArray.size()];
+        treeprops._predictions = MemoryManager.malloc4f(sharedTreeSubgraph.nodesArray.size());
 
         // Set root node's children, there is no guarantee the root node will be number 0
         treeprops._rightChildren[0] = sharedTreeSubgraph.rootNode.getRightChild() != null ? sharedTreeSubgraph.rootNode.getRightChild().getNodeNumber() : -1;
@@ -114,14 +124,14 @@ public class TreeHandler extends Handler {
         nodesToTraverse.add(sharedTreeSubgraph.rootNode);
         append(treeprops._rightChildren, treeprops._leftChildren,
                 treeprops._descriptions, treeprops._thresholds, treeprops._features, treeprops._nas,
-                treeprops.levels, nodesToTraverse, -1, false);
+                treeprops.levels, treeprops._predictions, nodesToTraverse, -1, false);
 
         return treeprops;
     }
 
     private static void append(final int[] rightChildren, final int[] leftChildren, final String[] nodesDescriptions,
                                final float[] thresholds, final String[] splitColumns, final String[] naHandlings,
-                               final int[][] levels,
+                               final int[][] levels, final float[] predictions,
                                final List<SharedTreeNode> nodesToTraverse, int pointer, boolean visitedRoot) {
         if(nodesToTraverse.isEmpty()) return;
 
@@ -132,7 +142,8 @@ public class TreeHandler extends Handler {
             final SharedTreeNode leftChild = node.getLeftChild();
             final SharedTreeNode rightChild = node.getRightChild();
             if(visitedRoot){
-                fillnodeDescriptions(node, nodesDescriptions, thresholds, splitColumns, levels, naHandlings, pointer);
+                fillnodeDescriptions(node, nodesDescriptions, thresholds, splitColumns, levels, predictions,
+                        naHandlings, pointer);
             } else {
                 StringBuilder rootDescriptionBuilder = new StringBuilder();
                 rootDescriptionBuilder.append("Root node has id ");
@@ -158,13 +169,13 @@ public class TreeHandler extends Handler {
             }
         }
 
-        append(rightChildren, leftChildren, nodesDescriptions, thresholds, splitColumns, naHandlings, levels,
+        append(rightChildren, leftChildren, nodesDescriptions, thresholds, splitColumns, naHandlings, levels, predictions,
                 discoveredNodes, pointer, true);
     }
 
     private static void fillnodeDescriptions(final SharedTreeNode node, final String[] nodeDescriptions,
                                              final float[] thresholds, final String[] splitColumns, final int[][] levels,
-                                             final String[] naHandlings, final int pointer) {
+                                             final float[] predictions, final String[] naHandlings, final int pointer) {
         final StringBuilder nodeDescriptionBuilder = new StringBuilder();
         int[] nodeLevels = node.getParent().isBitset() ? extractNodeLevels(node) : null;
         nodeDescriptionBuilder.append("Node has id ");
@@ -201,6 +212,7 @@ public class TreeHandler extends Handler {
         splitColumns[pointer] = node.getColName();
         naHandlings[pointer] = getNaDirection(node);
         levels[pointer] = nodeLevels;
+        predictions[pointer] = node.getPredValue();
         thresholds[pointer] = node.getSplitValue();
     }
 
@@ -298,6 +310,7 @@ public class TreeHandler extends Handler {
         public String[] _features;
         public int[][] levels; // Categorical levels, points to a list of categoricals that is already existing within the model on the client.
         public String[] _nas;
+        public float[] _predictions; // Prediction values on terminal nodes
 
     }
 }

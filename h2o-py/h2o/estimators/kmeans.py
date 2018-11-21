@@ -24,10 +24,11 @@ class H2OKMeansEstimator(H2OEstimator):
     def __init__(self, **kwargs):
         super(H2OKMeansEstimator, self).__init__()
         self._parms = {}
-        names_list = {"model_id", "training_frame", "validation_frame", "nfolds", "keep_cross_validation_predictions",
-                      "keep_cross_validation_fold_assignment", "fold_assignment", "fold_column", "ignored_columns",
-                      "ignore_const_cols", "score_each_iteration", "k", "estimate_k", "user_points", "max_iterations",
-                      "standardize", "seed", "init", "max_runtime_secs", "categorical_encoding"}
+        names_list = {"model_id", "training_frame", "validation_frame", "nfolds", "keep_cross_validation_models",
+                      "keep_cross_validation_predictions", "keep_cross_validation_fold_assignment", "fold_assignment",
+                      "fold_column", "ignored_columns", "ignore_const_cols", "score_each_iteration", "k", "estimate_k",
+                      "user_points", "max_iterations", "standardize", "seed", "init", "max_runtime_secs",
+                      "categorical_encoding", "export_checkpoints_dir"}
         if "Lambda" in kwargs: kwargs["lambda_"] = kwargs.pop("Lambda")
         for pname, pvalue in kwargs.items():
             if pname == 'model_id':
@@ -82,6 +83,21 @@ class H2OKMeansEstimator(H2OEstimator):
     def nfolds(self, nfolds):
         assert_is_type(nfolds, None, int)
         self._parms["nfolds"] = nfolds
+
+
+    @property
+    def keep_cross_validation_models(self):
+        """
+        Whether to keep the cross-validation models.
+
+        Type: ``bool``  (default: ``True``).
+        """
+        return self._parms.get("keep_cross_validation_models")
+
+    @keep_cross_validation_models.setter
+    def keep_cross_validation_models(self, keep_cross_validation_models):
+        assert_is_type(keep_cross_validation_models, None, bool)
+        self._parms["keep_cross_validation_models"] = keep_cross_validation_models
 
 
     @property
@@ -327,5 +343,20 @@ class H2OKMeansEstimator(H2OEstimator):
     def categorical_encoding(self, categorical_encoding):
         assert_is_type(categorical_encoding, None, Enum("auto", "enum", "one_hot_internal", "one_hot_explicit", "binary", "eigen", "label_encoder", "sort_by_response", "enum_limited"))
         self._parms["categorical_encoding"] = categorical_encoding
+
+
+    @property
+    def export_checkpoints_dir(self):
+        """
+        Automatically export generated models to this directory.
+
+        Type: ``str``.
+        """
+        return self._parms.get("export_checkpoints_dir")
+
+    @export_checkpoints_dir.setter
+    def export_checkpoints_dir(self, export_checkpoints_dir):
+        assert_is_type(export_checkpoints_dir, None, str)
+        self._parms["export_checkpoints_dir"] = export_checkpoints_dir
 
 

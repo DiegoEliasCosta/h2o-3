@@ -12,7 +12,7 @@ buildscript {
     //noinspection GroovyAssignabilityCheck
     dependencies {
         classpath 'org.ow2.asm:asm:5.1'
-        classpath 'com.github.jengelman.gradle.plugins:shadow:2.0.3'
+        classpath 'com.github.jengelman.gradle.plugins:shadow:4.0.2'
         classpath 'org.gradle.api.plugins:gradle-nexus-plugin:0.7.1'
         classpath 'com.github.townsfolk:gradle-release:1.2'
         classpath 'com.adaptc.gradle:nexus-workflow:0.6'
@@ -208,6 +208,9 @@ subprojects {
     version = rootProject.version
 
     repositories {
+        if (project.hasProperty("enableMavenLocal")) { // useful for development
+            mavenLocal()
+        }
         mavenCentral()
         jcenter()
         maven {
@@ -222,7 +225,6 @@ subprojects {
         maven {
           url "http://repository.mapr.com/maven/"
         }
-        // mavenLocal()
     }
 
     // Publish artifacts - we should filter subproject in future but now apply publisher plugin
@@ -291,7 +293,7 @@ subprojects {
 }
 
 task wrapper(type: Wrapper) {
-  gradleVersion = '4.7'
+  gradleVersion = '4.10'
   distributionType = Wrapper.DistributionType.ALL
 }
 

@@ -36,26 +36,26 @@ class H2ODeepLearningEstimator(H2OEstimator):
     def __init__(self, **kwargs):
         super(H2ODeepLearningEstimator, self).__init__()
         self._parms = {}
-        names_list = {"model_id", "training_frame", "validation_frame", "nfolds", "keep_cross_validation_predictions",
-                      "keep_cross_validation_fold_assignment", "fold_assignment", "fold_column", "response_column",
-                      "ignored_columns", "ignore_const_cols", "score_each_iteration", "weights_column", "offset_column",
-                      "balance_classes", "class_sampling_factors", "max_after_balance_size",
-                      "max_confusion_matrix_size", "max_hit_ratio_k", "checkpoint", "pretrained_autoencoder",
-                      "overwrite_with_best_model", "use_all_factor_levels", "standardize", "activation", "hidden",
-                      "epochs", "train_samples_per_iteration", "target_ratio_comm_to_comp", "seed", "adaptive_rate",
-                      "rho", "epsilon", "rate", "rate_annealing", "rate_decay", "momentum_start", "momentum_ramp",
-                      "momentum_stable", "nesterov_accelerated_gradient", "input_dropout_ratio",
-                      "hidden_dropout_ratios", "l1", "l2", "max_w2", "initial_weight_distribution",
-                      "initial_weight_scale", "initial_weights", "initial_biases", "loss", "distribution",
-                      "quantile_alpha", "tweedie_power", "huber_alpha", "score_interval", "score_training_samples",
-                      "score_validation_samples", "score_duty_cycle", "classification_stop", "regression_stop",
-                      "stopping_rounds", "stopping_metric", "stopping_tolerance", "max_runtime_secs",
+        names_list = {"model_id", "training_frame", "validation_frame", "nfolds", "keep_cross_validation_models",
+                      "keep_cross_validation_predictions", "keep_cross_validation_fold_assignment", "fold_assignment",
+                      "fold_column", "response_column", "ignored_columns", "ignore_const_cols", "score_each_iteration",
+                      "weights_column", "offset_column", "balance_classes", "class_sampling_factors",
+                      "max_after_balance_size", "max_confusion_matrix_size", "max_hit_ratio_k", "checkpoint",
+                      "pretrained_autoencoder", "overwrite_with_best_model", "use_all_factor_levels", "standardize",
+                      "activation", "hidden", "epochs", "train_samples_per_iteration", "target_ratio_comm_to_comp",
+                      "seed", "adaptive_rate", "rho", "epsilon", "rate", "rate_annealing", "rate_decay",
+                      "momentum_start", "momentum_ramp", "momentum_stable", "nesterov_accelerated_gradient",
+                      "input_dropout_ratio", "hidden_dropout_ratios", "l1", "l2", "max_w2",
+                      "initial_weight_distribution", "initial_weight_scale", "initial_weights", "initial_biases",
+                      "loss", "distribution", "quantile_alpha", "tweedie_power", "huber_alpha", "score_interval",
+                      "score_training_samples", "score_validation_samples", "score_duty_cycle", "classification_stop",
+                      "regression_stop", "stopping_rounds", "stopping_metric", "stopping_tolerance", "max_runtime_secs",
                       "score_validation_sampling", "diagnostics", "fast_mode", "force_load_balance",
                       "variable_importances", "replicate_training_data", "single_node_mode", "shuffle_training_data",
                       "missing_values_handling", "quiet_mode", "autoencoder", "sparse", "col_major",
                       "average_activation", "sparsity_beta", "max_categorical_features", "reproducible",
                       "export_weights_and_biases", "mini_batch_size", "categorical_encoding", "elastic_averaging",
-                      "elastic_averaging_moving_rate", "elastic_averaging_regularization"}
+                      "elastic_averaging_moving_rate", "elastic_averaging_regularization", "export_checkpoints_dir"}
         if "Lambda" in kwargs: kwargs["lambda_"] = kwargs.pop("Lambda")
         for pname, pvalue in kwargs.items():
             if pname == 'model_id':
@@ -111,6 +111,21 @@ class H2ODeepLearningEstimator(H2OEstimator):
     def nfolds(self, nfolds):
         assert_is_type(nfolds, None, int)
         self._parms["nfolds"] = nfolds
+
+
+    @property
+    def keep_cross_validation_models(self):
+        """
+        Whether to keep the cross-validation models.
+
+        Type: ``bool``  (default: ``True``).
+        """
+        return self._parms.get("keep_cross_validation_models")
+
+    @keep_cross_validation_models.setter
+    def keep_cross_validation_models(self, keep_cross_validation_models):
+        assert_is_type(keep_cross_validation_models, None, bool)
+        self._parms["keep_cross_validation_models"] = keep_cross_validation_models
 
 
     @property
@@ -988,13 +1003,14 @@ class H2ODeepLearningEstimator(H2OEstimator):
         Metric to use for early stopping (AUTO: logloss for classification, deviance for regression)
 
         One of: ``"auto"``, ``"deviance"``, ``"logloss"``, ``"mse"``, ``"rmse"``, ``"mae"``, ``"rmsle"``, ``"auc"``,
-        ``"lift_top_group"``, ``"misclassification"``, ``"mean_per_class_error"``  (default: ``"auto"``).
+        ``"lift_top_group"``, ``"misclassification"``, ``"mean_per_class_error"``, ``"custom"``, ``"custom_increasing"``
+        (default: ``"auto"``).
         """
         return self._parms.get("stopping_metric")
 
     @stopping_metric.setter
     def stopping_metric(self, stopping_metric):
-        assert_is_type(stopping_metric, None, Enum("auto", "deviance", "logloss", "mse", "rmse", "mae", "rmsle", "auc", "lift_top_group", "misclassification", "mean_per_class_error"))
+        assert_is_type(stopping_metric, None, Enum("auto", "deviance", "logloss", "mse", "rmse", "mae", "rmsle", "auc", "lift_top_group", "misclassification", "mean_per_class_error", "custom", "custom_increasing"))
         self._parms["stopping_metric"] = stopping_metric
 
 
@@ -1374,6 +1390,21 @@ class H2ODeepLearningEstimator(H2OEstimator):
     def elastic_averaging_regularization(self, elastic_averaging_regularization):
         assert_is_type(elastic_averaging_regularization, None, numeric)
         self._parms["elastic_averaging_regularization"] = elastic_averaging_regularization
+
+
+    @property
+    def export_checkpoints_dir(self):
+        """
+        Automatically export generated models to this directory.
+
+        Type: ``str``.
+        """
+        return self._parms.get("export_checkpoints_dir")
+
+    @export_checkpoints_dir.setter
+    def export_checkpoints_dir(self, export_checkpoints_dir):
+        assert_is_type(export_checkpoints_dir, None, str)
+        self._parms["export_checkpoints_dir"] = export_checkpoints_dir
 
 
 

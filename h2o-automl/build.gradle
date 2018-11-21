@@ -4,9 +4,11 @@ dependencies {
   compile project(":h2o-genmodel")
   compile project(":h2o-core")
   compile project(":h2o-algos")
+  compile project(":h2o-ext-xgboost")
 
   // Test dependencies only
   testCompile "junit:junit:${junitVersion}"
+  testCompile "org.mockito:mockito-core:2.23.0"
   testCompile project(path: ":h2o-core", configuration: "testArchives")
 }
 

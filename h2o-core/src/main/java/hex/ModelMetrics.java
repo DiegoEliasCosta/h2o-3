@@ -3,7 +3,9 @@ package hex;
 import water.*;
 import water.exceptions.H2OIllegalArgumentException;
 import water.exceptions.H2OKeyNotFoundArgumentException;
+import water.fvec.Chunk;
 import water.fvec.Frame;
+import water.fvec.Vec;
 import water.util.IcedHashMap;
 import water.util.Log;
 import water.util.PojoUtils;
@@ -125,11 +127,17 @@ public class ModelMetrics extends Keyed<ModelMetrics> {
   }
 
   static public double getMetricFromModelMetric(ModelMetrics mm, String criterion) {
-    if (null == criterion || criterion.equals("")) throw new H2OIllegalArgumentException("Need a valid criterion, but got '" + criterion + "'.");
+    if (null == criterion || criterion.equals("")) {
+      throw new H2OIllegalArgumentException("Need a valid criterion, but got '" + criterion + "'.");
+    }
+
     Method method = null;
+    Object obj = null;
+    criterion = criterion.toLowerCase();
     ConfusionMatrix cm = mm.cm();
     try {
-      method = mm.getClass().getMethod(criterion.toLowerCase());
+      method = mm.getClass().getMethod(criterion);
+      obj = mm;
     }
     catch (Exception e) {
       // fall through
@@ -137,7 +145,8 @@ public class ModelMetrics extends Keyed<ModelMetrics> {
 
     if (null == method && null != cm) {
       try {
-        method = cm.getClass().getMethod(criterion.toLowerCase());
+        method = cm.getClass().getMethod(criterion);
+        obj = cm;
       }
       catch (Exception e) {
         // fall through
@@ -146,20 +155,15 @@ public class ModelMetrics extends Keyed<ModelMetrics> {
     if (null == method)
       throw new H2OIllegalArgumentException("Failed to find ModelMetrics for criterion: " + criterion);
 
-    double c;
     try {
-      c = (double) method.invoke(mm);
-    } catch(Exception fallthru) {
-      try {
-        c = (double)method.invoke(cm);
-      } catch (Exception e) {
-        throw new H2OIllegalArgumentException(
-                "Failed to get metric: " + criterion + " from ModelMetrics object: " + mm,
-                "Failed to get metric: " + criterion + " from ModelMetrics object: " + mm + ", criterion: " + method + ", exception: " + e
-        );
-      }
+      return (double) method.invoke(obj);
+    } catch (Exception e) {
+      Log.err(e);
+      throw new H2OIllegalArgumentException(
+              "Failed to get metric: " + criterion + " from ModelMetrics object: " + mm,
+              "Failed to get metric: " + criterion + " from ModelMetrics object: " + mm + ", criterion: " + method + ", exception: " + e.getMessage()
+      );
     }
-    return c;
   }
 
 
@@ -205,8 +209,8 @@ public class ModelMetrics extends Keyed<ModelMetrics> {
       Model model = modelKey.get();
       mm = ModelMetrics.getFromDKV(model, this.frame);
       if (null == mm) {
-        // call score()
-        Frame preds = model.score(this.frame);
+        // call score() and immediately delete the resulting frame to avoid leaks
+        model.score(this.frame).delete();
 
         mm = ModelMetrics.getFromDKV(model, this.frame);
         if (null == mm) {
@@ -448,5 +452,14 @@ public class ModelMetrics extends Keyed<ModelMetrics> {
     public void setCustomMetric(CustomMetric customMetric) {
       _customMetric = customMetric;
     }
+
+    public Frame makePredictionCache(Model m, Vec response) {
+      return null;
+    }
+
+    public void cachePrediction(double[] cdist, Chunk[] chks, int row, int cacheChunkIdx, Model m) {
+      throw new UnsupportedOperationException("Should be overridden in implementation (together with makePredictionCache(..)).");
+    }
+
   }
 }

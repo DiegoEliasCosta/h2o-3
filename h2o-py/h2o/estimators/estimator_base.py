@@ -22,12 +22,13 @@ from ..model.clustering import H2OClusteringModel
 from ..model.dim_reduction import H2ODimReductionModel
 from ..model.metrics_base import (H2OBinomialModelMetrics, H2OClusteringModelMetrics, H2ORegressionModelMetrics,
                                   H2OMultinomialModelMetrics, H2OAutoEncoderModelMetrics, H2ODimReductionModelMetrics,
-                                  H2OWordEmbeddingModelMetrics, H2OOrdinalModelMetrics)
+                                  H2OWordEmbeddingModelMetrics, H2OOrdinalModelMetrics, H2OAnomalyDetectionModelMetrics)
 from ..model.model_base import ModelBase
 from ..model.multinomial import H2OMultinomialModel
 from ..model.ordinal import H2OOrdinalModel
 from ..model.regression import H2ORegressionModel
 from ..model.word_embedding import H2OWordEmbeddingModel
+from ..model.anomaly_detection import H2OAnomalyDetectionModel
 
 
 class EstimatorAttributeError(AttributeError):
@@ -130,7 +131,7 @@ class H2OEstimator(ModelBase):
         if "__class__" in parms:  # FIXME: hackt for PY3
             del parms["__class__"]
         is_auto_encoder = bool(parms.get("autoencoder"))
-        is_supervised = not(is_auto_encoder or algo in {"aggregator", "pca", "svd", "kmeans", "glrm", "word2vec"})
+        is_supervised = not(is_auto_encoder or algo in {"aggregator", "pca", "svd", "kmeans", "glrm", "word2vec", "isolationforest"})
         if not training_frame_exists:
             names = training_frame.names
             ncols = training_frame.ncols
@@ -181,11 +182,11 @@ class H2OEstimator(ModelBase):
                             raise H2OValueError("Column %s not in the training frame" % xi)
                         xset.add(xi)
             x = list(xset)
+            self._check_and_save_parm(parms, "offset_column", offset_column)
+            self._check_and_save_parm(parms, "weights_column", weights_column)
+            self._check_and_save_parm(parms, "fold_column", fold_column)
 
-            parms["offset_column"] = offset_column
-            parms["fold_column"] = fold_column
-            parms["weights_column"] = weights_column
-            parms["max_runtime_secs"] = max_runtime_secs
+        if max_runtime_secs is not None: parms["max_runtime_secs"] = max_runtime_secs
 
         # Overwrites the model_id parameter only if model_id is passed
         if model_id is not None:
@@ -193,7 +194,7 @@ class H2OEstimator(ModelBase):
 
         # Step 2
         is_auto_encoder = "autoencoder" in parms and parms["autoencoder"]
-        is_unsupervised = is_auto_encoder or self.algo in {"aggregator", "pca", "svd", "kmeans", "glrm", "word2vec"}
+        is_unsupervised = is_auto_encoder or self.algo in {"aggregator", "pca", "svd", "kmeans", "glrm", "word2vec", "isolationforest"}
         if is_auto_encoder and y is not None: raise ValueError("y should not be specified for autoencoder.")
         if not is_unsupervised and y is None: raise ValueError("Missing response")
 
@@ -304,13 +305,13 @@ class H2OEstimator(ModelBase):
 
 
     #------ Scikit-learn Interface Methods -------
-    def fit(self, x, y=None, **params):
+    def fit(self, X, y=None, **params):
         """
         Fit an H2O model as part of a scikit-learn pipeline or grid search.
 
         A warning will be issued if a caller other than sklearn attempts to use this method.
 
-        :param H2OFrame x: An H2OFrame consisting of the predictor variables.
+        :param H2OFrame X: An H2OFrame consisting of the predictor variables.
         :param H2OFrame y: An H2OFrame consisting of the response variable.
         :param params: Extra arguments.
         :returns: The current instance of H2OEstimator for method chaining.
@@ -325,8 +326,8 @@ class H2OEstimator(ModelBase):
         if warn:
             warnings.warn("\n\n\t`fit` is not recommended outside of the sklearn framework. Use `train` instead.",
                           UserWarning, stacklevel=2)
-        training_frame = x.cbind(y) if y is not None else x
-        x = x.names
+        training_frame = X.cbind(y) if y is not None else X
+        x = X.names
         y = y.names[0] if y is not None else None
         self.train(x, y, training_frame, **params)
         return self
@@ -401,6 +402,63 @@ class H2OEstimator(ModelBase):
         elif model_type == "WordEmbedding":
             metrics_class = H2OWordEmbeddingModelMetrics
             model_class = H2OWordEmbeddingModel
+        elif model_type == "AnomalyDetection":
+            metrics_class = H2OAnomalyDetectionModelMetrics
+            model_class = H2OAnomalyDetectionModel
         else:
             raise NotImplementedError(model_type)
         return [metrics_class, model_class]
+
+    def convert_H2OXGBoostParams_2_XGBoostParams(self):
+        '''
+        In order to use convert_H2OXGBoostParams_2_XGBoostParams and convert_H2OFrame_2_DMatrix, you must import
+        the following toolboxes: xgboost, pandas, numpy and scipy.sparse.
+
+        Given an H2OXGBoost model, this method will generate the corresponding parameters that should be used by
+        native XGBoost in order to give exactly the same result, assuming that the same dataset
+        (derived from h2oFrame) is used to train the native XGBoost model.
+
+        Follow the steps below to compare H2OXGBoost and native XGBoost:
+
+        1. Train the H2OXGBoost model with H2OFrame trainFile and generate a prediction:
+        h2oModelD = H2OXGBoostEstimator(**h2oParamsD) # parameters specified as a dict()
+        h2oModelD.train(x=myX, y=y, training_frame=trainFile) # train with H2OFrame trainFile
+        h2oPredict = h2oPredictD = h2oModelD.predict(trainFile)
+
+        2. Derive the DMatrix from H2OFrame:
+        nativeDMatrix = trainFile.convert_H2OFrame_2_DMatrix(myX, y, h2oModelD)
+
+        3. Derive the parameters for native XGBoost:
+        nativeParams = h2oModelD.convert_H2OXGBoostParams_2_XGBoostParams()
+
+        4. Train your native XGBoost model and generate a prediction:
+        nativeModel = xgb.train(params=nativeParams[0], dtrain=nativeDMatrix, num_boost_round=nativeParams[1])
+        nativePredict = nativeModel.predict(data=nativeDMatrix, ntree_limit=nativeParams[1].
+
+        5. Compare the predictions h2oPredict from H2OXGBoost, nativePredict from native XGBoost.
+
+        :return: nativeParams, num_boost_round
+        '''
+        import xgboost as xgb
+
+        nativeParams = self._model_json["output"]["native_parameters"]
+        nativeXGBoostParams = dict()
+
+        for (a,keyname,keyvalue) in nativeParams.cell_values:
+            nativeXGBoostParams[keyname]=keyvalue
+        paramsSet = self.full_parameters
+
+        return nativeXGBoostParams, paramsSet['ntrees']['actual_value']
+
+    def _check_and_save_parm(self, parms, parameter_name, parameter_value):
+        """
+        If a parameter is not stored in parms dict save it there (even though the value is None).
+        Else check if the parameter has been already set during initialization of estimator. If yes, check the new value is the same or not. If the values are different, set the last passed value to params dict and throw UserWarning.
+        """
+        if parameter_name not in parms:
+            parms[parameter_name] = parameter_value
+        elif parameter_value is not None and parms[parameter_name] != parameter_value:
+            parms[parameter_name] = parameter_value
+            warnings.warn("\n\n\t`%s` parameter has been already set and had a different value in `train` method. The last passed value \"%s\" is used." % (parameter_name, parameter_value), UserWarning, stacklevel=2)
+
+

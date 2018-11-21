@@ -14,7 +14,7 @@ The second module, `h2o-ext-xgboost <https://github.com/h2oai/h2o-3/tree/master/
 
 XGBoost in H2O supports multicore, thanks to OpenMP. The multicore implementation will only be available if the system itself supports it. (It has the right version of libraries.) If the requirements are not satisfied, XGBoost will use a fallback that is single core only. Multi-node support is currently available as a Beta feature.
 
-Refer to the `XGBoost in H2O Machine Learning Platform <https://blog.h2o.ai/2017/06/xgboost-in-h2o-machine-learning-platform/>`__ blog post for an example of how to use XGBoost with the HIGGS dataset. 
+Refer to the `XGBoost in H2O Machine Learning Platform <https://www.h2o.ai/blog/xgboost-in-h2o-machine-learning-platform/>`__ blog post for an example of how to use XGBoost with the HIGGS dataset. 
 
 Defining an XGBoost Model
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -97,7 +97,7 @@ Defining an XGBoost Model
 
 -  `categorical_encoding <algo-params/categorical_encoding.html>`__: Specify one of the following encoding schemes for handling categorical features:
 
-  - ``auto`` or ``AUTO``: Allow the algorithm to decide. In XGBoost, the algorithm will automatically perform ``enum`` encoding. (default)
+  - ``auto`` or ``AUTO``: Allow the algorithm to decide. In XGBoost, the algorithm will automatically perform ``one_hot_internal`` encoding. (default)
   - ``enum`` or ``Enum``: 1 column per categorical feature
   - ``one_hot_internal`` or ``OneHotInternal``: On the fly N+1 new cols for categorical features with N levels
   - ``one_hot_explicit`` or ``OneHotExplicit``: N+1 new columns for categorical features with N levels
@@ -235,9 +235,7 @@ The list of limitations include:
 
   1. XGBoost is not supported on Windows.
 
-  2. XGBoost is initialized for single-node H2O clusters; however multi-node XGBoost support is available as a Beta feature.
-
-  3. The list of supported platforms includes:
+  2. The list of supported platforms includes:
  
     +----------+-----------------+-----+-----+-----------------------+
     | Platform | Minimal XGBoost | OMP | GPU | Compilation OS        |
@@ -251,9 +249,9 @@ The list of limitations include:
 
     **Note**: Minimal XGBoost configuration includes support for a single CPU.
 
-  4. Because we are using native XGBoost libraries that depend on OS/platform libraries, it is possible that on older operating systems, XGBoost will not be able to find all necessary binary dependencies, and will not be initialized and available.
+  3. Because we are using native XGBoost libraries that depend on OS/platform libraries, it is possible that on older operating systems, XGBoost will not be able to find all necessary binary dependencies, and will not be initialized and available.
 
-  5. XGBoost GPU libraries are compiled against CUDA 8, which is a necessary runtime requirement in order to utilize XGBoost GPU support.
+  4. XGBoost GPU libraries are compiled against CUDA 8, which is a necessary runtime requirement in order to utilize XGBoost GPU support.
 
 Disabling XGBoost
 ~~~~~~~~~~~~~~~~~
@@ -295,7 +293,7 @@ FAQs
 
 -  **How are categorical columns handled?**
 
-  By default, XGBoost converts every enum into the integer of its index (i.e., ``categorical_encoding="label_encoder"``). 
+  By default, XGBoost will create N+1 new cols for categorical features with N levels (i.e., ``categorical_encoding="one_hot_internal"``). 
 
 -  **Why does my H2O cloud on Hadoop became unresponsive when running XGBoost even when I supplied 4 times the datasize memory?**
 

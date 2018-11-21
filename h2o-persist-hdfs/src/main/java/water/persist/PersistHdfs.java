@@ -185,7 +185,7 @@ public final class PersistHdfs extends Persist {
           assert v.isPersisted();
         } finally {
           s.getWrappedStream().close();
-          FileUtils.close(s);
+          FileUtils.closeSilently(s);
         }
         return null;
       }
@@ -295,10 +295,9 @@ public final class PersistHdfs extends Persist {
   }
 
   private static void addFolder(FileSystem fs, Path p, ArrayList<String> keys, ArrayList<String> failed) {
+    if (fs == null) return;
+    Futures futures = new Futures();
     try {
-      if( fs == null ) return;
-
-      Futures futures = new Futures();
       for( FileStatus file : fs.listStatus(p, HIDDEN_FILE_FILTER) ) {
         Path pfs = file.getPath();
         if(file.isDirectory()) {
@@ -312,6 +311,8 @@ public final class PersistHdfs extends Persist {
     } catch( Exception e ) {
       Log.err(e);
       failed.add(p.toString());
+    } finally {
+      futures.blockForPending();
     }
   }
 
@@ -459,6 +460,12 @@ public final class PersistHdfs extends Persist {
     catch (IOException e) {
       throw new HDFSIOException(path, CONF.toString(), e);
     }
+  }
+
+  @Override
+  public String getParent(String path) {
+    Path p = new Path(path);
+    return p.getParent().toUri().toString();
   }
 
   @Override

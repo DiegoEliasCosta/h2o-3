@@ -49,6 +49,7 @@ This Appendix provides detailed descriptions of parameters that can be specified
    data-science/algo-params/intercept
    data-science/algo-params/k
    data-science/algo-params/keep_cross_validation_fold_assignment
+   data-science/algo-params/keep_cross_validation_models
    data-science/algo-params/keep_cross_validation_predictions
    data-science/algo-params/lambda
    data-science/algo-params/lambda_min_ratio
@@ -90,6 +91,7 @@ This Appendix provides detailed descriptions of parameters that can be specified
    data-science/algo-params/remove_collinear_columns
    data-science/algo-params/sample_rate
    data-science/algo-params/sample_rate_per_class
+   data-science/algo-params/sample_size
    data-science/algo-params/score_each_iteration
    data-science/algo-params/score_tree_interval
    data-science/algo-params/seed

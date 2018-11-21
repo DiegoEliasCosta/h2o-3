@@ -15,7 +15,6 @@ import org.junit.Ignore;
 import org.junit.Test;
 import water.*;
 import water.H2O.H2OCountedCompleter;
-import water.exceptions.H2OIllegalArgumentException;
 import water.fvec.*;
 import water.parser.BufferedString;
 import water.parser.ParseDataset;
@@ -462,7 +461,7 @@ public class GLMTest  extends TestUtil {
       for(int i = 0; i < bins.length; ++i)
         means[i] = bins[i]*sumInv;
       DataInfo dinfo = new DataInfo(fr, null, 1, true, TransformType.STANDARDIZE, DataInfo.TransformType.NONE, true, false, false, false, false, false);
-      GLMTask.GLMMultinomialGradientTask gmt = new GLMTask.GLMMultinomialGradientTask(null,dinfo,0,beta,1.0/fr.numRows()).doAll(dinfo._adaptedFrame);
+      GLMTask.GLMMultinomialGradientBaseTask gmt = new GLMTask.GLMMultinomialGradientTask(null,dinfo,0,beta,1.0/fr.numRows()).doAll(dinfo._adaptedFrame);
       assertEquals(0.6421113,gmt._likelihood/fr.numRows(),1e-8);
       System.out.println("likelihood = " + gmt._likelihood/fr.numRows());
       double [] g = gmt.gradient();
@@ -1733,6 +1732,7 @@ public class GLMTest  extends TestUtil {
       params._lambda_search = true;
       params._nfolds = 3;
       params._standardize = false;
+      params._keep_cross_validation_models = true;
       GLM glm = new GLM(params);
       model = glm.trainModel().get();
     } finally {

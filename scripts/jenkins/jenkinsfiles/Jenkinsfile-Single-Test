@@ -30,11 +30,9 @@ try {
               // clear the folder
               deleteDir()
               // checkout H2O-3
-              retry(3) {
-                timeout(time: 1, unit: 'MINUTES') {
-                  echo "###### Checkout H2O-3 ######"
-                  scmEnv = checkout scm
-                }
+              retryWithTimeout(60, 3) {
+                echo "###### Checkout H2O-3 ######"
+                scmEnv = checkout scm
               }
             }
 
@@ -54,7 +52,7 @@ try {
               // Load the defineTestStages script
               defineTestStages = load('h2o-3/scripts/jenkins/groovy/defineTestStages.groovy')
             }
-            healthCheckPassed = pipelineContext.getHealthChecker().checkHealth(this, env.NODE_NAME, pipelineContext.getBuildConfig().DEFAULT_IMAGE, pipelineContext.getBuildConfig().DOCKER_REGISTRY, pipelineContext.getBuildConfig())
+            healthCheckPassed = pipelineContext.getHealthChecker().checkHealth(this, env.NODE_NAME, pipelineContext.getBuildConfig().getDefaultImage(), pipelineContext.getBuildConfig().DOCKER_REGISTRY, pipelineContext.getBuildConfig())
             if (healthCheckPassed) {
               // Load build script and execute it
               def buildH2O3 = load('h2o-3/scripts/jenkins/groovy/buildH2O3.groovy')

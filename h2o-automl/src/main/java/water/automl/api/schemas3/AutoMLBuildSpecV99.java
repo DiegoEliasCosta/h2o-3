@@ -1,10 +1,11 @@
 package water.automl.api.schemas3;
 
 
-import ai.h2o.automl.AutoML;
+import ai.h2o.automl.Algo;
 import ai.h2o.automl.AutoMLBuildSpec;
 import hex.schemas.HyperSpaceSearchCriteriaV99;
 import water.api.API;
+import water.api.EnumValuesProvider;
 import water.api.Schema;
 import water.api.schemas3.*;
 
@@ -42,14 +43,17 @@ public class AutoMLBuildSpecV99 extends SchemaV3<AutoMLBuildSpec, AutoMLBuildSpe
     @API(help = "Maximum relative size of the training data after balancing class counts (defaults to 5.0 and can be less than 1.0). Requires balance_classes.", level = API.Level.expert, direction = API.Direction.INOUT)
     public float max_after_balance_size;
 
-    @API(help="Whether to keep the predictions of the cross-validation predictions. If set to false then running the same AutoML object for repeated runs will cause an exception as CV predictions are required to build additional Stacked Ensemble models in AutoML.", direction=API.Direction.INPUT)
+    @API(help="Whether to keep the predictions of the cross-validation predictions.  This needs to be set to TRUE if running the same AutoML object for repeated runs because CV predictions are required to build additional Stacked Ensemble models in AutoML.", direction=API.Direction.INPUT)
     public boolean keep_cross_validation_predictions;
 
-    @API(help="Whether to keep the cross-validated models. Deleting cross-validation models will save memory in the H2O cluster.", direction=API.Direction.INPUT)
+    @API(help="Whether to keep the cross-validated models. Keeping cross-validation models may consume significantly more memory in the H2O cluster.", direction=API.Direction.INPUT, gridable = true)
     public boolean keep_cross_validation_models;
 
     @API(help="Whether to keep cross-validation assignments.", direction=API.Direction.INPUT)
     public boolean keep_cross_validation_fold_assignment;
+
+    @API(help = "Path to a directory where every generated model will be stored.", direction = API.Direction.INOUT)
+    public String export_checkpoints_dir;
 
   } // class AutoMLBuildControlV99
 
@@ -111,13 +115,19 @@ public class AutoMLBuildSpecV99 extends SchemaV3<AutoMLBuildSpec, AutoMLBuildSpe
 
   } // class AutoMLInputV99
 
+  public static final class AlgoProvider extends EnumValuesProvider<Algo> {
+    public AlgoProvider() {
+      super(Algo.class);
+    }
+  }
+
   static final public class AutoMLBuildModelsV99 extends Schema<AutoMLBuildSpec.AutoMLBuildModels, AutoMLBuildModelsV99> {
     public AutoMLBuildModelsV99() {
       super();
     }
 
-    @API(help="A list algorithms to skip during the model-building phase.", values = {"GLM", "DRF", "GBM", "DeepLearning", "StackedEnsemble"}, direction=API.Direction.INPUT)
-    public AutoML.Algo[] exclude_algos;
+    @API(help="A list algorithms to skip during the model-building phase.", valuesProvider=AlgoProvider.class, direction=API.Direction.INPUT)
+    public Algo[] exclude_algos;
 
   } // class AutoMLBuildModels
 

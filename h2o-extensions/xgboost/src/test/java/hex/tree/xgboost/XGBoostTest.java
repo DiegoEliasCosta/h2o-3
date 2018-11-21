@@ -11,7 +11,9 @@ import hex.genmodel.utils.DistributionFamily;
 import ml.dmlc.xgboost4j.java.*;
 import ml.dmlc.xgboost4j.java.DMatrix;
 import ml.dmlc.xgboost4j.java.XGBoost;
+import org.hamcrest.CoreMatchers;
 import org.junit.*;
+import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import water.*;
@@ -20,8 +22,9 @@ import water.fvec.Frame;
 import water.fvec.TestFrameBuilder;
 import water.fvec.Vec;
 import water.rapids.Rapids;
-import water.rapids.Val;
+import water.util.ArrayUtils;
 import water.util.Log;
+import water.util.TwoDimTable;
 
 import java.io.*;
 import java.util.*;
@@ -32,17 +35,26 @@ import static water.util.FileUtils.locateFile;
 @RunWith(Parameterized.class)
 public class XGBoostTest extends TestUtil {
 
-  @Parameterized.Parameters(name = "XGBoost(javaMojoScoring={0}")
-  public static Iterable<? extends Object> data() {
-    return Arrays.asList("true", "false");
+  @Parameterized.Parameters(name = "XGBoost(javaMojoScoring={0},javaPredict={1}")
+  public static Collection<Object[]> data() {
+    return Arrays.asList(new Object[][]{
+            {"false", "false"}, {"true", "true"}, {"true", "false"}, {"false", "true"}
+    });
   }
 
   @Parameterized.Parameter
-  public String confJavaScoring;
+  public String confMojoJavaScoring;
+
+  @Parameterized.Parameter(1)
+  public String confJavaPredict;
+
+  @Rule
+  public ExpectedException thrown = ExpectedException.none();
 
   @Before
   public void setupMojoJavaScoring() {
-    System.setProperty("sys.ai.h2o.xgboost.scoring.java.enable", confJavaScoring);
+    System.setProperty("sys.ai.h2o.xgboost.scoring.java.enable", confMojoJavaScoring); // mojo scoring
+    System.setProperty("sys.ai.h2o.xgboost.predict.java.enable", confMojoJavaScoring); // in-h2o predict
   }
 
   public static final class FrameMetadata {
@@ -512,6 +524,7 @@ public class XGBoostTest extends TestUtil {
       parms._stopping_rounds = 3;
       parms._score_tree_interval = 1;
       parms._seed = 123;
+      parms._keep_cross_validation_models = true;
 
       model = new hex.tree.xgboost.XGBoost(parms).trainModel().get();
       final int ntrees = model._output._ntrees;
@@ -686,6 +699,42 @@ public class XGBoostTest extends TestUtil {
 
   }
 
+  @Test
+  public void testNativeParams() {
+    Frame tfr = null;
+    XGBoostModel model = null;
+    Scope.enter();
+    try {
+      tfr = parse_test_file("./smalldata/prostate/prostate.csv");
+
+      XGBoostModel.XGBoostParameters parms = new XGBoostModel.XGBoostParameters();
+      parms._train = tfr._key;
+      parms._response_column = "AGE";
+      parms._ignored_columns = new String[]{"ID"};
+
+      model = new hex.tree.xgboost.XGBoost(parms).trainModel().get();
+
+      TwoDimTable np = model._output._native_parameters;
+      assertNotNull(np);
+      System.out.println(np.toString());
+
+      Set<String> names = new HashSet<>();
+      for (int i = 0; i < np.getRowDim(); i++) {
+        names.add(String.valueOf(np.get(i, 0)));
+      }
+      assertEquals(names, new HashSet<>(Arrays.asList(
+              "colsample_bytree", "silent", "tree_method", "seed", "max_depth", "booster", "objective", "nround",
+              "lambda", "eta", "grow_policy", "nthread", "alpha", "colsample_bylevel", "subsample", "min_child_weight",
+              "gamma", "max_delta_step")));
+    } finally {
+      Scope.exit();
+      if (tfr!=null) tfr.remove();
+      if (model!=null) {
+        model.delete();
+        model.deleteCrossValidationModels();
+      }
+    }
+  }
 
   @Test
   public void testBinomialTrainingWeights() {
@@ -1218,13 +1267,23 @@ public class XGBoostTest extends TestUtil {
     XGBoostModel sparseModel = null;
     XGBoostModel denseModel = null;
     try {
-      Frame sparseFrame = Scope.track(TestUtil.generate_enum_only(2, 10, 10, 0));
-      Frame denseFrame = Scope.track(TestUtil.generate_enum_only(2, 10, 2, 0));
+
+      // Fill ratio 0.2 (response not counted)
+      Frame sparseFrame = Scope.track(new TestFrameBuilder()
+              .withName("sparse_frame")
+              .withColNames("C1", "C2", "C3")
+              .withVecTypes(Vec.T_NUM,Vec.T_NUM,Vec.T_NUM)
+              .withDataForCol(0, ard( 1,0, 0, 0, 0))
+              .withDataForCol(1, ard( 0, 1, 0, 0, 0))
+              .withDataForCol(2, ard( 2, 1,1, 4, 3))
+              .build());
+
 
       XGBoostModel.XGBoostParameters parms = new XGBoostModel.XGBoostParameters();
       parms._train = sparseFrame._key;
-      parms._response_column = "C1";
+      parms._response_column = "C3";
       parms._seed = 42;
+      parms._backend = XGBoostModel.XGBoostParameters.Backend.cpu;
       parms._ntrees = 1;
       parms._dmatrix_type = XGBoostModel.XGBoostParameters.DMatrixType.auto;
 
@@ -1232,9 +1291,20 @@ public class XGBoostTest extends TestUtil {
       assertNotNull(sparseModel);
       assertTrue(sparseModel._output._sparse);
 
+      // Fill ratio 0.3 (response not counted) - the threshold for sprase is >= 0.3
+      Frame denseFrame = Scope.track(new TestFrameBuilder()
+              .withName("sparse_frame")
+              .withColNames("C1", "C2", "C3")
+              .withVecTypes(Vec.T_NUM,Vec.T_NUM,Vec.T_NUM)
+              .withDataForCol(0, ard( 1,0, 0, 0, 0))
+              .withDataForCol(1, ard( 1, 1, 0, 0, 0))
+              .withDataForCol(2, ard( 2, 1,1, 4, 3))
+              .build());
+
       parms._train = denseFrame._key;
-      parms._response_column = "C1";
+      parms._response_column = "C3";
       parms._seed = 42;
+      parms._backend = XGBoostModel.XGBoostParameters.Backend.cpu;
       parms._ntrees = 1;
       parms._dmatrix_type = XGBoostModel.XGBoostParameters.DMatrixType.auto;
 
@@ -1317,6 +1387,75 @@ public class XGBoostTest extends TestUtil {
     } finally {
       Scope.exit();
     }
+  }
+
+  @Test
+  public void testMonotoneConstraints() {
+    Scope.enter();
+    try {
+      final String response = "power (hp)";
+
+      Frame f = parse_test_file("smalldata/junit/cars.csv");
+      f.replace(f.find(response), f.vecs()[f.find("cylinders")].toNumericVec()).remove();
+      DKV.put(Scope.track(f));
+
+      XGBoostModel.XGBoostParameters parms = new XGBoostModel.XGBoostParameters();
+      parms._dmatrix_type = XGBoostModel.XGBoostParameters.DMatrixType.auto;
+      parms._response_column = response;
+      parms._train = f._key;
+      parms._ignored_columns = new String[]{"name"};
+      parms._seed = 42;
+
+      XGBoostModel.XGBoostParameters noConstrParams = (XGBoostModel.XGBoostParameters) parms.clone();
+      XGBoostModel noConstrModel = new hex.tree.xgboost.XGBoost(noConstrParams).trainModel().get();
+      Scope.track_generic(noConstrModel);
+
+      assertTrue(ArrayUtils.contains(noConstrModel._output._varimp._names, "cylinders"));
+
+      XGBoostModel.XGBoostParameters constrParams = (XGBoostModel.XGBoostParameters) parms.clone();
+      constrParams._monotone_constraints = new KeyValue[] {new KeyValue("cylinders", -1)};
+      XGBoostModel constrModel = new hex.tree.xgboost.XGBoost(constrParams).trainModel().get();
+      Scope.track_generic(constrModel);
+
+      // we essentially eliminated the effect of the feature by setting an inverted constraint
+      assertFalse(ArrayUtils.contains(constrModel._output._varimp._names, "cylinders"));
+    } finally {
+      Scope.exit();
+    }
+  }
+
+  @Test
+  public void testValidateMonotoneConstraints() {
+    Scope.enter();
+    try {
+      final String response = "power (hp)";
+
+      Frame f = parse_test_file("smalldata/junit/cars.csv");
+      Scope.track(f);
+
+      XGBoostModel.XGBoostParameters parms = new XGBoostModel.XGBoostParameters();
+      parms._dmatrix_type = XGBoostModel.XGBoostParameters.DMatrixType.auto;
+      parms._response_column = response;
+      parms._train = f._key;
+      parms._seed = 42;
+
+      thrown.expect(H2OModelBuilderIllegalArgumentException.class);
+      thrown.expectMessage(CoreMatchers.containsString(
+              "Details: ERRR on field: _monotone_constraints: Invalid constraint - column 'name' has type Enum. Only numeric columns can have monotonic constraints."));
+      Model m = trainWithConstraints(parms, new KeyValue("name", -1));
+      assertNotNull(m); // shouldn't be reached
+      assertFalse(true);
+    } finally {
+      Scope.exit();
+    }
+  }
+
+  private static XGBoostModel trainWithConstraints(XGBoostModel.XGBoostParameters p, KeyValue... constraints) {
+    XGBoostModel.XGBoostParameters parms = (XGBoostModel.XGBoostParameters) p.clone();
+    parms._monotone_constraints = constraints;
+    XGBoostModel model = new hex.tree.xgboost.XGBoost(parms).trainModel().get();
+    Scope.track_generic(model);
+    return model;
   }
 
   private static XGBoostMojoModel getMojo(XGBoostModel model) throws IOException {

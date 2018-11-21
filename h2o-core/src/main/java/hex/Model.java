@@ -1,9 +1,6 @@
 package hex;
 
-import hex.genmodel.GenModel;
-import hex.genmodel.MojoModel;
-import hex.genmodel.MojoReaderBackend;
-import hex.genmodel.MojoReaderBackendFactory;
+import hex.genmodel.*;
 import hex.genmodel.algos.glrm.GlrmMojoModel;
 import hex.genmodel.algos.tree.SharedTreeGraph;
 import hex.genmodel.algos.tree.SharedTreeMojoModel;
@@ -31,10 +28,7 @@ import water.util.*;
 import java.io.*;
 import java.lang.reflect.Field;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.Random;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -195,6 +189,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     public Key<Frame> _train;               // User-Key of the Frame the Model is trained on
     public Key<Frame> _valid;               // User-Key of the Frame the Model is validated on, if any
     public int _nfolds = 0;
+    public boolean _keep_cross_validation_models = true;
     public boolean _keep_cross_validation_predictions = false;
     public boolean _keep_cross_validation_fold_assignment = false;
     public boolean _parallelize_cross_validation = true;
@@ -313,6 +308,11 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
      * Reference to custom metric function.
      */
     public String _custom_metric_func = null;
+
+    /**
+     * Directory where generated models will be exported
+     */
+    public String _export_checkpoints_dir;
 
     // Public no-arg constructor for reflective creation
     public Parameters() { _ignore_const_cols = defaultDropConsCols(); }
@@ -1098,9 +1098,12 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
    * @param interactionBldr Column names to create pairwise interactions with
    * @param catEncoded Whether the categorical columns of the test frame were already transformed via categorical_encoding
    */
-  public static String[] adaptTestForTrain(Frame test, String[] origNames, String[][] origDomains, String[] names, String[][] domains,
-                                           Parameters parms, boolean expensive, boolean computeMetrics, InteractionBuilder interactionBldr, ToEigenVec tev,
-                                           IcedHashMap<Key, String> toDelete, boolean catEncoded) throws IllegalArgumentException {
+  public static String[] adaptTestForTrain(final Frame test, final String[] origNames, final String[][] origDomains,
+                                           String[] names, String[][] domains, final Parameters parms,
+                                           final boolean expensive, final boolean computeMetrics,
+                                           final InteractionBuilder interactionBldr, final ToEigenVec tev,
+                                           final IcedHashMap<Key, String> toDelete, final boolean catEncoded)
+          throws IllegalArgumentException {
     String[] msg = new String[0];
     if (test == null) return msg;
     if (catEncoded && origNames==null) return msg;
@@ -1154,8 +1157,9 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     Vec vvecs[] = new Vec[names.length];
     int good = 0;               // Any matching column names, at all?
     int convNaN = 0;  // count of columns that were replaced with NA
-    for( int i=0; i<names.length; i++ ) {
-      Vec vec = test.vec(names[i]); // Search in the given validation set
+    final Frame.FrameVecRegistry frameVecRegistry = test.frameVecRegistry();
+    for (int i = 0; i < names.length; i++) {
+      Vec vec = frameVecRegistry.findByColName(names[i]); // Search in the given validation set
       boolean isResponse = response != null && names[i].equals(response);
       boolean isWeights = weights != null && names[i].equals(weights);
       boolean isOffset = offset != null && names[i].equals(offset);
@@ -1225,39 +1229,57 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     if( good == names.length || (response != null && test.find(response) == -1 && good == names.length - 1) )  // Only update if got something for all columns
       test.restructure(names,vvecs,good);
 
-    boolean haveCategoricalPredictors = false;
     if (expensive && checkCategoricals && !catEncoded) {
-      for (int i=0; i<test.numCols(); ++i) {
-        if (test.names()[i].equals(response)) continue;
-        if (test.names()[i].equals(weights)) continue;
-        if (test.names()[i].equals(offset)) continue;
-        if (test.names()[i].equals(fold)) continue;
-        // either the column of the test set is categorical (could be a numeric col that's already turned into a factor)
-        if (test.vec(i).cardinality() > 0) {
-          haveCategoricalPredictors = true;
-          break;
-        }
-        // or a equally named column of the training set is categorical, but the test column isn't (e.g., numeric column provided to be converted to a factor)
-        int whichCol = ArrayUtils.find(names, test.name(i));
-        if (whichCol >= 0 && domains[whichCol] != null) {
-          haveCategoricalPredictors = true;
-          break;
-        }
+      final boolean hasCategoricalPredictors = hasCategoricalPredictors(test, response, weights, offset, fold, names, domains);
+
+      // check if we first need to expand categoricals before calling this method again
+      if (hasCategoricalPredictors) {
+        Frame updated = categoricalEncoder(test, new String[]{weights, offset, fold, response}, parms._categorical_encoding, tev, parms._max_categorical_levels);
+        toDelete.put(updated._key, "categorically encoded frame");
+        test.restructure(updated.names(), updated.vecs()); //updated in place
+        String[] msg2 = adaptTestForTrain(test, origNames, origDomains, backupNames, backupDomains, parms, expensive, computeMetrics, interactionBldr, tev, toDelete, true /*catEncoded*/);
+        msgs.addAll(Arrays.asList(msg2));
+        return msgs.toArray(new String[msgs.size()]);
       }
-    }
-    // check if we first need to expand categoricals before calling this method again
-    if (expensive && !catEncoded && haveCategoricalPredictors) {
-      Frame updated = categoricalEncoder(test, new String[]{weights, offset, fold, response}, parms._categorical_encoding, tev, parms._max_categorical_levels);
-      toDelete.put(updated._key, "categorically encoded frame");
-      test.restructure(updated.names(), updated.vecs()); //updated in place
-      String[] msg2 = adaptTestForTrain(test, origNames, origDomains, backupNames, backupDomains, parms, expensive, computeMetrics, interactionBldr, tev, toDelete, true /*catEncoded*/);
-      msgs.addAll(Arrays.asList(msg2));
-      return msgs.toArray(new String[msgs.size()]);
     }
     if( good == convNaN )
       throw new IllegalArgumentException("Test/Validation dataset has no columns in common with the training set");
 
     return msgs.toArray(new String[msgs.size()]);
+  }
+
+  private static boolean hasCategoricalPredictors(final Frame frame, final String responseName,
+                                           final String wieghtsName, final String offsetName,
+                                           final String foldName, final String[] names,
+                                           final String[][] domains) {
+
+    boolean haveCategoricalPredictors = false;
+    final Map<String, Integer> namesIndicesMap = new HashMap<>(names.length);
+
+    for (int i = 0; i < names.length; i++) {
+      namesIndicesMap.put(names[i], i);
+    }
+
+    for (int i = 0; i < frame.numCols(); ++i) {
+      if (frame.names()[i].equals(responseName)) continue;
+      if (frame.names()[i].equals(wieghtsName)) continue;
+      if (frame.names()[i].equals(offsetName)) continue;
+      if (frame.names()[i].equals(foldName)) continue;
+      // either the column of the test set is categorical (could be a numeric col that's already turned into a factor)
+      if (frame.vec(i).get_type() == Vec.T_CAT) {
+        haveCategoricalPredictors = true;
+        break;
+      }
+      // or a equally named column of the training set is categorical, but the test column isn't (e.g., numeric column provided to be converted to a factor)
+      final int whichCol = namesIndicesMap.get(frame.name(i));
+      if (whichCol >= 0 && domains[whichCol] != null) {
+        haveCategoricalPredictors = true;
+        break;
+      }
+    }
+
+    return haveCategoricalPredictors;
+
   }
 
 
@@ -1419,6 +1441,15 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     return makeScoringNames(_output);
   }
 
+  protected String[][] makeScoringDomains(Frame adaptFrm, boolean computeMetrics, String[] names) {
+    String[][] domains = new String[names.length][];
+    domains[0] = names.length == 1 ? null : !computeMetrics ? _output._domains[_output._domains.length - 1] : adaptFrm.lastVec().domain();
+    if (_parms._distribution == DistributionFamily.quasibinomial) {
+      domains[0] = new String[]{"0", "1"};
+    }
+    return domains;
+  }
+
   public static <O extends Model.Output> String [] makeScoringNames(O output){
     final int nc = output.nclasses();
     final int ncols = nc==1?1:nc+1; // Regression has 1 predict col; classification also has class distribution
@@ -1464,11 +1495,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
   protected Frame predictScoreImpl(Frame fr, Frame adaptFrm, String destination_key, Job j, boolean computeMetrics, CFuncRef customMetricFunc) {
     // Build up the names & domains.
     String[] names = makeScoringNames();
-    String[][] domains = new String[names.length][];
-    domains[0] = names.length == 1 ? null : !computeMetrics ? _output._domains[_output._domains.length-1] : adaptFrm.lastVec().domain();
-    if (_parms._distribution == DistributionFamily.quasibinomial) {
-      domains[0] = new String[]{"0", "1"};
-    }
+    String[][] domains = makeScoringDomains(adaptFrm, computeMetrics, names);
 
     // Score the dataset, building the class distribution & predictions
     BigScore bs = makeBigScoreTask(domains,
@@ -1515,7 +1542,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     return bs._mb;
   }
 
-  protected class BigScore extends CMetricScoringTask<BigScore> {
+  protected class BigScore extends CMetricScoringTask<BigScore> implements BigScorePredict, BigScoreChunkPredict {
     final protected String[] _domain; // Prediction domain; union of test and train classes
     final protected int _npredcols;  // Number of columns in prediction; nclasses+1 - can be less than the prediction domain
     final double[] _mean;  // Column means of test frame
@@ -1523,6 +1550,8 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     final public boolean _hasWeights;
     final public boolean _makePreds;
     final public Job _j;
+
+    private transient BigScorePredict _localPredict;
 
     /** Output parameter: Metric builder */
     public ModelMetrics.MetricBuilder _mb;
@@ -1537,7 +1566,14 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       _hasWeights = testHasWeights;
     }
 
-    @Override public void map( Chunk chks[], NewChunk cpreds[] ) {
+    @Override
+    protected void setupLocal() {
+      super.setupLocal();
+      _localPredict = setupBigScorePredict(this);
+      assert _localPredict != null;
+    }
+
+    @Override public void map(Chunk chks[], NewChunk cpreds[] ) {
       if (isCancelled() || _j != null && _j.stop_requested()) return;
       Chunk weightsChunk = _hasWeights && _computeMetrics ? chks[_output.weightsIdx()] : null;
       Chunk offsetChunk = _output.hasOffset() ? chks[_output.offsetIdx()] : null;
@@ -1552,96 +1588,54 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
           actual = new float[chks.length];
       }
       int len = chks[0]._len;
-
-      try {
-        setupBigScorePredict();
-
-        if(!bulkBigScorePredict()) {
-          double [] tmp = new double[_output.nfeatures()];
-          double[] preds = _mb._work;  // Sized for the union of test and train classes
-          for (int row = 0; row < len; row++) {
-            double weight = weightsChunk != null ? weightsChunk.atd(row) : 1;
-            if (weight == 0) {
-              if (_makePreds) {
-                for (int c = 0; c < _npredcols; c++)  // Output predictions; sized for train only (excludes extra test classes)
-                  cpreds[c].addNum(0);
-              }
-              continue;
-            }
-            double offset = offsetChunk != null ? offsetChunk.atd(row) : 0;
-            double[] p = score0(chks, offset, row, tmp, preds);
-            if (_computeMetrics) {
-              if (isSupervised()) {
-                actual[0] = (float) responseChunk.atd(row);
-              } else {
-                for (int i = 0; i < actual.length; ++i)
-                  actual[i] = (float) data(chks, row, i);
-              }
-              _mb.perRow(preds, actual, weight, offset, Model.this);
-              // Handle custom metric
-              customMetricPerRow(preds, actual, weight, offset, Model.this);
-            }
+      try (BigScoreChunkPredict predict = _localPredict.initMap(_fr, chks)) {
+        double[] tmp = new double[_output.nfeatures()];
+        for (int row = 0; row < len; row++) {
+          double weight = weightsChunk != null ? weightsChunk.atd(row) : 1;
+          if (weight == 0) {
             if (_makePreds) {
               for (int c = 0; c < _npredcols; c++)  // Output predictions; sized for train only (excludes extra test classes)
-                cpreds[c].addNum(p[c]);
+                cpreds[c].addNum(0);
             }
+            continue;
           }
-        } else {
-          int[] indices = new int[len];
-          double[] offsets = offsetChunk != null ? new double[len] : null;
-          int nonZeroW = 0;
-          for (int row = 0; row < len; row++) {
-            double weight = getWeight(weightsChunk, row);
-            if (weight == 0) {
-              if (_makePreds) {
-                for (int c = 0; c < _npredcols; c++)  // Output predictions; sized for train only (excludes extra test classes)
-                  cpreds[c].addNum(0);
-              }
-              continue;
+          double offset = offsetChunk != null ? offsetChunk.atd(row) : 0;
+          double[] preds = predict.score0(chks, offset, row, tmp, _mb._work);
+          if (_computeMetrics) {
+            if (isSupervised()) {
+              actual[0] = (float) responseChunk.atd(row);
+            } else {
+              for (int i = 0; i < actual.length; ++i)
+                actual[i] = (float) data(chks, row, i);
             }
-            if(offsetChunk != null) {
-              offsets[nonZeroW] = getOffset(offsetChunk, row);
-            }
-            indices[nonZeroW++] = row;
+            _mb.perRow(preds, actual, weight, offset, Model.this);
+            // Handle custom metric
+            customMetricPerRow(preds, actual, weight, offset, Model.this);
           }
-
-          indices = Arrays.copyOf(indices, nonZeroW);
-
-          if(0 == nonZeroW) {
-            return;
-          }
-
-          double[][] bulkPreds = new double[nonZeroW][];
-          for(int i = 0; i < bulkPreds.length; i++) {
-            bulkPreds[i] = new double[_mb._work.length];
-          }
-          double[][] bulkTmp = new double[nonZeroW][];
-          for(int i = 0; i < bulkTmp.length; i++) {
-            bulkTmp[i] = new double[_output.nfeatures()];
-          }
-          double[][] p = score0(chks, offsets, indices, bulkTmp, bulkPreds);
-          for(int rowIdx = 0; rowIdx < indices.length; rowIdx++) {
-            int row = indices[rowIdx];
-            if (_computeMetrics) {
-              if (isSupervised()) {
-                actual[0] = (float) responseChunk.atd(row);
-              } else {
-                for (int i = 0; i < actual.length; ++i)
-                  actual[i] = (float) data(chks, row, i);
-              }
-              _mb.perRow(bulkPreds[rowIdx], actual, getWeight(weightsChunk, row), getOffset(offsetChunk, row), Model.this);
-            }
-            if (_makePreds) {
-              for (int c = 0; c < _npredcols; c++)  // Output predictions; sized for train only (excludes extra test classes)
-                cpreds[c].addNum(p[rowIdx][c]);
-            }
+          if (_makePreds) {
+            for (int c = 0; c < _npredcols; c++)  // Output predictions; sized for train only (excludes extra test classes)
+              cpreds[c].addNum(preds[c]);
           }
         }
-      } finally {
-        closeBigScorePredict();
       }
     }
-    @Override public void reduce( BigScore bs ) {
+
+    @Override
+    public double[] score0(Chunk[] chks, double offset, int row_in_chunk, double[] tmp, double[] preds) {
+      return Model.this.score0(chks, offset, row_in_chunk, tmp, preds);
+    }
+
+    @Override
+    public BigScoreChunkPredict initMap(final Frame fr, final Chunk[] chks) {
+      return this;
+    }
+
+    @Override
+    public void close() {
+      // nothing to do - meant to be overridden
+    }
+
+    @Override public void reduce(BigScore bs ) {
       super.reduce(bs);
       if (_mb != null) _mb.reduce(bs._mb);
     }
@@ -1652,20 +1646,19 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
         _mb.postGlobal(getComputedCustomMetric());
       }
     }
-
-    private double getOffset(Chunk offsetChunk, int row) {
-      return offsetChunk != null ? offsetChunk.atd(row) : 0;
-    }
-
-    private double getWeight(Chunk weightsChunk, int row) {
-      return weightsChunk != null ? weightsChunk.atd(row) : 1;
-    }
-
   }
 
-  protected boolean bulkBigScorePredict() { return false; }
-  protected void setupBigScorePredict() {}
-  protected void closeBigScorePredict() {}
+  protected interface BigScorePredict {
+    BigScoreChunkPredict initMap(final Frame fr, final Chunk chks[]);
+  }
+
+  protected interface BigScoreChunkPredict extends AutoCloseable {
+    double[] score0(Chunk chks[], double offset, int row_in_chunk, double[] tmp, double[] preds);
+    @Override
+    void close();
+  }
+
+  protected BigScorePredict setupBigScorePredict(BigScore bs) { return bs; };
 
   // OVerride this if your model needs data preprocessing (on the fly standardization, NA handling)
   protected double data(Chunk[] chks, int row, int col) {
@@ -1679,11 +1672,6 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
    *  subclass scoring logic. */
   public double[] score0( Chunk chks[], int row_in_chunk, double[] tmp, double[] preds ) {
     return score0(chks, 0, row_in_chunk, tmp, preds);
-  }
-
-  // To be implemented by Models that override bulkBigScorePredict() to return true
-  public double[][] score0( Chunk chks[], double[] offset, int[] rowsInChunk, double[][] tmp, double[][] preds ) {
-    throw new IllegalStateException("Not implemented.");
   }
 
   public double[] score0( Chunk chks[], double offset, int row_in_chunk, double[] tmp, double[] preds ) {
@@ -2218,6 +2206,12 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
                 decisionPath = mmp.leafNodeAssignments;
                 nodeIds = mmp.leafNodeAssignmentIds;
                 break;
+              case AnomalyDetection:
+                AnomalyDetectionPrediction adp = (AnomalyDetectionPrediction) p;
+                d2 = (col == 0) ? adp.normalizedScore : adp.score;
+                decisionPath = adp.leafNodeAssignments;
+                nodeIds = adp.leafNodeAssignmentIds;
+                break;
               case DimReduction:
                 d2 = (genmodel instanceof GlrmMojoModel)?((DimReductionModelPrediction) p).reconstructed[col]:
                         ((DimReductionModelPrediction) p).dimensions[col];    // look at the reconstructed matrix
@@ -2262,22 +2256,39 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     }
   }
 
+  static <T extends Lockable<T>> int deleteAll(Key<T>[] keys) {
+    int c = 0;
+    for (Key k : keys) {
+      T t = DKV.getGet(k);
+      if (t != null) {
+        t.delete(); //delete all subparts
+        c++;
+      }
+    }
+    return c;
+  }
+
+  /**
+   * delete from the output all associated CV models from DKV.
+   */
   public void deleteCrossValidationModels() {
     if (_output._cross_validation_models != null) {
-      for (Key k : _output._cross_validation_models) {
-        Model m = DKV.getGet(k);
-        if (m!=null) m.delete(); //delete all subparts
-      }
+      Log.info("Cleaning up CV Models for " + this._key.toString());
+      int count = deleteAll(_output._cross_validation_models);
+      Log.info(count+" CV models were removed");
     }
   }
 
+  /**
+   * delete from the output all associated CV predictions from DKV.
+   */
   public void deleteCrossValidationPreds() {
     if (_output._cross_validation_predictions != null) {
-      for (Key k : _output._cross_validation_predictions) {
-        Frame f = DKV.getGet(k);
-        if (f!=null) f.delete();
-      }
+      Log.info("Cleaning up CV Predictions for " + this._key.toString());
+      int count = deleteAll(_output._cross_validation_predictions);
+      Log.info(count+" CV predictions were removed");
     }
+
     if (_output._cross_validation_holdout_predictions_frame_id != null) {
       _output._cross_validation_holdout_predictions_frame_id.remove();
     }
@@ -2288,7 +2299,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
   }
 
   /** Model stream writer - output Java code representation of model. */
-  public class JavaModelStreamWriter extends StreamWriter {
+  public class JavaModelStreamWriter implements StreamWriter {
     /** Show only preview */
     private final boolean preview;
 
@@ -2430,7 +2441,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       is.close();
       return model;
     } finally {
-      FileUtils.close(is);
+      FileUtils.closeSilently(is);
     }
   }
 
@@ -2439,7 +2450,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
    * @param location target path, it can be on local filesystem, HDFS, S3...
    * @param force If true, overwrite already existing file
    * @return URI representation of the target location
-   * @throws IOException when writing fails
+   * @throws water.api.FSIOException when writing fails
    */
   public URI exportBinaryModel(String location, boolean force) throws IOException {
     OutputStream os = null;
@@ -2451,7 +2462,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       os.close();
       return targetUri;
     } finally {
-      FileUtils.close(os);
+      FileUtils.closeSilently(os);
     }
   }
 
@@ -2473,7 +2484,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       os.close();
       return targetUri;
     } finally {
-      FileUtils.close(os);
+      FileUtils.closeSilently(os);
     }
   }
 
@@ -2494,6 +2505,41 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
               new ByteArrayInputStream(os.toByteArray()), MojoReaderBackendFactory.CachingStrategy.MEMORY);
       return MojoModel.load(mojoReaderBackend);
     }
+  }
+
+  ModelDescriptor modelDescriptor() {
+    return new ModelDescriptor() {
+      @Override
+      public String[][] scoringDomains() { return Model.this.scoringDomains(); }
+      @Override
+      public String projectVersion() { return H2O.ABV.projectVersion(); }
+      @Override
+      public String algoName() { return _parms.algoName(); }
+      @Override
+      public String algoFullName() { return _parms.fullName(); }
+      @Override
+      public ModelCategory getModelCategory() { return _output.getModelCategory(); }
+      @Override
+      public boolean isSupervised() { return _output.isSupervised(); }
+      @Override
+      public int nfeatures() { return _output.nfeatures(); }
+      @Override
+      public int nclasses() { return _output.nclasses(); }
+      @Override
+      public String[] columnNames() { return _output._names; }
+      @Override
+      public boolean balanceClasses() { return _parms._balance_classes; }
+      @Override
+      public double defaultThreshold() { return Model.this.defaultThreshold(); }
+      @Override
+      public double[] priorClassDist() { return _output._priorClassDist; }
+      @Override
+      public double[] modelClassDist() { return _output._modelClassDist; }
+      @Override
+      public String uuid() { return String.valueOf(Model.this.checksum()); }
+      @Override
+      public String timestamp() { return new DateTime().toString(); }
+    };
   }
 
 }

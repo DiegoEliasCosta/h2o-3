@@ -21,7 +21,7 @@ function make_zip_common {
 
   mkdir $IMAGEDIR/python
 
-  cp h2o-py/dist/*whl $IMAGEDIR/python
+  cp h2o-py/build/dist/*whl $IMAGEDIR/python
 
   mkdir -p $IMAGEDIR/bindings/java
   cp h2o-bindings/build/distributions/h2o-bindings-*.zip $IMAGEDIR/bindings/java
@@ -108,12 +108,12 @@ openssl dgst target/Rjar/h2o.jar | sed 's/.*= //' > target/Rjar/h2o.jar.md5
 mkdir -p target/Python
 
 name=""
-for f in h2o-py/dist/*
+for f in h2o-py/build/dist/*
 do
   name=${f##*/}
 done
 
-cp h2o-py/dist/*whl target/Python
+cp h2o-py/build/dist/*whl target/Python
 
 cd h2o-py && sphinx-build -b html docs/ docs/docs/
 cd ..
